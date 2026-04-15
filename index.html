@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title data-i18n="app.title">月の満ち欠け・日食月食シミュレーター</title>
+    <meta name="description" content="月の公転位置と月相、日食・月食の成立条件を直感的に学べるブラウザ教材" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1 class="topbar__title" data-i18n="app.title">月の満ち欠け・日食月食シミュレーター</h1>
+      <div class="topbar__actions">
+        <label class="selectbox">
+          <span data-i18n="ui.language">言語</span>
+          <select id="langSelect">
+            <option value="ja">日本語</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <button id="themeToggle" class="btn btn--ghost" type="button" title="テーマ切替">
+          <span id="themeIcon">🌙</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- 操作パネル -->
+      <section class="panel panel--controls" aria-labelledby="ctrlTitle">
+        <h2 id="ctrlTitle" class="panel__title" data-i18n="panel.controls">操作パネル</h2>
+
+        <div class="ctrl">
+          <div class="ctrl__row">
+            <button id="playBtn" class="btn btn--primary" type="button" data-i18n="ui.play">再生</button>
+            <label class="ctrl__label">
+              <span data-i18n="ui.speed">速度</span>
+              <select id="speedSelect">
+                <option value="0.25">0.25x</option>
+                <option value="1" selected>1x</option>
+                <option value="4">4x</option>
+                <option value="16">16x</option>
+                <option value="64">64x</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="ctrl__label ctrl__label--block">
+            <span><span data-i18n="ui.moonAngle">月の公転角</span>: <output id="angleOut">0°</output></span>
+            <input id="angleSlider" type="range" min="0" max="360" step="0.1" value="0" />
+          </label>
+
+          <label class="ctrl__label ctrl__label--block">
+            <span><span data-i18n="ui.day">経過日数</span>: <output id="dayOut">0.0</output></span>
+            <input id="daySlider" type="range" min="0" max="365" step="0.1" value="0" />
+          </label>
+
+          <div class="ctrl__row ctrl__row--wrap">
+            <button class="btn" data-jump="new" type="button" data-i18n="phase.new">新月</button>
+            <button class="btn" data-jump="firstQuarter" type="button" data-i18n="phase.firstQuarter">上弦</button>
+            <button class="btn" data-jump="full" type="button" data-i18n="phase.full">満月</button>
+            <button class="btn" data-jump="lastQuarter" type="button" data-i18n="phase.lastQuarter">下弦</button>
+          </div>
+
+          <div class="ctrl__row ctrl__row--wrap">
+            <button class="btn btn--accent" id="jumpSolar" type="button" data-i18n="ui.jumpSolar">日食位置へ</button>
+            <button class="btn btn--accent" id="jumpLunar" type="button" data-i18n="ui.jumpLunar">月食位置へ</button>
+          </div>
+
+          <label class="ctrl__check">
+            <input id="tiltToggle" type="checkbox" checked />
+            <span data-i18n="ui.tilt">白道傾斜 (5.14°) を有効化</span>
+          </label>
+
+          <div class="ctrl__row">
+            <label class="ctrl__label">
+              <span data-i18n="ui.zoom">ズーム</span>
+              <input id="zoomSlider" type="range" min="0.4" max="2.5" step="0.05" value="1" />
+            </label>
+            <label class="ctrl__label">
+              <span data-i18n="ui.rotate">俯瞰回転</span>
+              <input id="rotateSlider" type="range" min="0" max="360" step="1" value="0" />
+            </label>
+            <button id="viewReset" class="btn btn--ghost" type="button" data-i18n="ui.reset">リセット</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 可視化ビュー -->
+      <section class="panel panel--views">
+        <div class="view view--overhead">
+          <h3 class="view__title" data-i18n="view.overhead">俯瞰ビュー</h3>
+          <canvas id="overhead" width="720" height="480" aria-label="overhead view"></canvas>
+        </div>
+        <div class="view view--moon">
+          <h3 class="view__title" data-i18n="view.moon">地球視点ビュー</h3>
+          <canvas id="moonView" width="360" height="360" aria-label="moon view"></canvas>
+          <div class="moon-info">
+            <div><span data-i18n="ui.phaseName">月相名</span>: <strong id="phaseName">—</strong></div>
+            <div><span data-i18n="ui.moonAge">月齢</span>: <strong id="moonAge">0.0</strong></div>
+            <div><span data-i18n="ui.phaseAngle">位相角</span>: <strong id="phaseAngle">0°</strong></div>
+            <div><span data-i18n="ui.illum">照度</span>: <strong id="illum">0%</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 学習パネル -->
+      <section class="panel panel--learn" aria-labelledby="learnTitle">
+        <h2 id="learnTitle" class="panel__title" data-i18n="panel.learn">学習パネル</h2>
+
+        <div class="tabs" role="tablist">
+          <button class="tab tab--active" data-tab="explain" role="tab" type="button" data-i18n="ui.explain">解説</button>
+          <button class="tab" data-tab="quiz" role="tab" type="button" data-i18n="ui.quiz">クイズ</button>
+        </div>
+
+        <div id="tabExplain" class="tabpane tabpane--active" role="tabpanel">
+          <div id="eclipseBanner" class="banner" hidden></div>
+          <div id="explainBody" class="explain"></div>
+          <div class="hint" id="hintBody"></div>
+        </div>
+
+        <div id="tabQuiz" class="tabpane" role="tabpanel">
+          <div class="quiz">
+            <div class="quiz__head">
+              <select id="quizKind">
+                <option value="phaseName" data-i18n="quiz.kind.phaseName">月相名を答える</option>
+                <option value="layoutToPhase" data-i18n="quiz.kind.layoutToPhase">配置から月相</option>
+                <option value="eclipseCond" data-i18n="quiz.kind.eclipseCond">食の条件</option>
+              </select>
+              <button id="quizNew" class="btn" type="button" data-i18n="quiz.new">新しい問題</button>
+            </div>
+            <p id="quizQuestion" class="quiz__q"></p>
+            <div id="quizChoices" class="quiz__choices"></div>
+            <p id="quizFeedback" class="quiz__feedback"></p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <small data-i18n="app.note">教育用途のシミュレーションで、数値は近似です。実スケールではなく視認優先で描画しています。</small>
+    </footer>
+
+    <script type="module" src="./js/main.js"></script>
+  </body>
+</html>
