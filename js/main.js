@@ -76,15 +76,46 @@ function bindControls() {
 }
 
 function bindTabs() {
-  document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('tab--active'));
-      tab.classList.add('tab--active');
-      const target = tab.dataset.tab;
-      el('tabExplain').classList.toggle('tabpane--active', target === 'explain');
-      el('tabQuiz').classList.toggle('tabpane--active', target === 'quiz');
+  const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+  const panels = { explain: el('tabExplain'), quiz: el('tabQuiz') };
+
+  function activateTab(tab) {
+    tabs.forEach(t => {
+      const active = t === tab;
+      t.classList.toggle('tab--active', active);
+      t.setAttribute('aria-selected', String(active));
+      t.tabIndex = active ? 0 : -1;
     });
+    const target = tab.dataset.tab;
+    for (const [key, panel] of Object.entries(panels)) {
+      const show = key === target;
+      panel.classList.toggle('tabpane--active', show);
+      panel.hidden = !show;
+    }
+    tab.focus();
+  }
+
+  tabs.forEach(tab => tab.addEventListener('click', () => activateTab(tab)));
+
+  // Arrow-key navigation (roving tabindex)
+  el('tabBtnExplain').parentElement.addEventListener('keydown', e => {
+    let idx = tabs.indexOf(document.activeElement);
+    if (idx < 0) return;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      activateTab(tabs[(idx + 1) % tabs.length]);
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      activateTab(tabs[(idx - 1 + tabs.length) % tabs.length]);
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      activateTab(tabs[0]);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      activateTab(tabs[tabs.length - 1]);
+    }
   });
+
   el('quizNew').addEventListener('click', newQuiz);
   el('quizKind').addEventListener('change', newQuiz);
 }
@@ -96,10 +127,8 @@ function bindThemeLang() {
   el('langSelect').addEventListener('change', e => {
     setLang(e.target.value);
     applyStaticI18n();
-    // Refresh phase label, speed etc.
     document.title = t('app.title');
-    // Rebuild quiz to re-translate its text
-    newQuiz();
+    retranslateQuiz();
   });
 }
 
@@ -208,7 +237,8 @@ function render(s) {
 
 function newQuiz(opts = {}) {
   const kind = el('quizKind').value;
-  quiz = buildQuestion(kind, computeState(state.day, { tilt: state.tilt }));
+  quiz = buildQuestion(kind, computeState(state.day, { tilt: state.tilt }),
+    { useCurrentPhase: !!opts.keepTime });
   el('quizQuestion').textContent = quiz.text;
   el('quizFeedback').textContent = '';
   const choices = el('quizChoices');
@@ -233,6 +263,37 @@ function newQuiz(opts = {}) {
     }
     state.day = best;
     syncAngleSlider(); syncDaySlider(); clearTrail();
+  }
+}
+
+function retranslateQuiz() {
+  if (!quiz) return;
+  // Re-translate question text
+  if (quiz.kind === 'phaseName') quiz.text = t('q.phaseName');
+  else if (quiz.kind === 'layoutToPhase') quiz.text = t('q.layout');
+  else if (quiz.kind === 'eclipseCond') quiz.text = t('q.eclipse');
+  el('quizQuestion').textContent = quiz.text;
+  // Re-translate choice labels
+  for (const c of quiz.choices) {
+    if (quiz.kind === 'eclipseCond') {
+      c.label = t(`q.eclipse.${c.key}`);
+    } else {
+      c.label = t(`phase.${c.key}`);
+    }
+  }
+  // Update button text
+  const buttons = el('quizChoices').children;
+  for (let i = 0; i < buttons.length; i++) {
+    buttons[i].textContent = quiz.choices[i].label;
+  }
+  // Re-translate feedback if present
+  const fb = el('quizFeedback').textContent;
+  if (fb) {
+    // Check if it was correct or wrong by looking at existing button states
+    const hasOk = Array.from(buttons).some(b => b.dataset.state === 'ok');
+    const hasNg = Array.from(buttons).some(b => b.dataset.state === 'ng');
+    if (hasNg) el('quizFeedback').textContent = t('quiz.wrong');
+    else if (hasOk) el('quizFeedback').textContent = t('quiz.correct');
   }
 }
 

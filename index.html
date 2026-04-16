@@ -108,18 +108,18 @@
       <section class="panel panel--learn" aria-labelledby="learnTitle">
         <h2 id="learnTitle" class="panel__title" data-i18n="panel.learn">学習パネル</h2>
 
-        <div class="tabs" role="tablist">
-          <button class="tab tab--active" data-tab="explain" role="tab" type="button" data-i18n="ui.explain">解説</button>
-          <button class="tab" data-tab="quiz" role="tab" type="button" data-i18n="ui.quiz">クイズ</button>
+        <div class="tabs" role="tablist" aria-label="学習パネルタブ">
+          <button id="tabBtnExplain" class="tab tab--active" data-tab="explain" role="tab" type="button" aria-selected="true" aria-controls="tabExplain" tabindex="0" data-i18n="ui.explain">解説</button>
+          <button id="tabBtnQuiz" class="tab" data-tab="quiz" role="tab" type="button" aria-selected="false" aria-controls="tabQuiz" tabindex="-1" data-i18n="ui.quiz">クイズ</button>
         </div>
 
-        <div id="tabExplain" class="tabpane tabpane--active" role="tabpanel">
+        <div id="tabExplain" class="tabpane tabpane--active" role="tabpanel" aria-labelledby="tabBtnExplain">
           <div id="eclipseBanner" class="banner" hidden></div>
           <div id="explainBody" class="explain"></div>
           <div class="hint" id="hintBody"></div>
         </div>
 
-        <div id="tabQuiz" class="tabpane" role="tabpanel">
+        <div id="tabQuiz" class="tabpane" role="tabpanel" aria-labelledby="tabBtnQuiz" hidden>
           <div class="quiz">
             <div class="quiz__head">
               <select id="quizKind">

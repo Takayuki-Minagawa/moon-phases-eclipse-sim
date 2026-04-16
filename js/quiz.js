@@ -20,10 +20,10 @@ function shuffle(arr) {
 // Build a question object for the current state / requested kind.
 // For phaseName & layoutToPhase questions, the app should first jump the
 // simulation to `target.day` so the user can look at the rendered state.
-export function buildQuestion(kind, state) {
+export function buildQuestion(kind, state, opts = {}) {
   if (kind === 'phaseName' || kind === 'layoutToPhase') {
-    const truth = pick(PHASE_KEYS);
-    const targetSynodic = synodicForPhase(truth);
+    const truth = opts.useCurrentPhase ? state.phaseKey : pick(PHASE_KEYS);
+    const targetSynodic = opts.useCurrentPhase ? null : synodicForPhase(truth);
     const choices = shuffle([truth, ...shuffle(PHASE_KEYS.filter(k => k !== truth)).slice(0, 3)])
       .map(k => ({ key: k, label: t(`phase.${k}`) }));
     return {
