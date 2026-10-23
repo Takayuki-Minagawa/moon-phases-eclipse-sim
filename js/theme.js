@@ -3,16 +3,19 @@
 const KEY = 'mpes-theme';
 
 export function initTheme() {
-  const saved = localStorage.getItem(KEY);
+  let saved = null;
+  try { saved = localStorage.getItem(KEY); } catch { /* ignore */ }
   const preferred = window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   const theme = saved || preferred;
-  setTheme(theme);
+  setTheme(theme, false);
   return theme;
 }
 
-export function setTheme(theme) {
+export function setTheme(theme, persist = true) {
   document.documentElement.dataset.theme = theme;
-  localStorage.setItem(KEY, theme);
+  if (persist) {
+    try { localStorage.setItem(KEY, theme); } catch { /* ignore */ }
+  }
   const icon = document.getElementById('themeIcon');
   if (icon) icon.textContent = theme === 'dark' ? '☀️' : '🌙';
 }

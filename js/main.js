@@ -1,324 +1,776 @@
-// Application entry: state, inputs, render loop.
+// Application entry: state, inputs, render loop, learning panel.
 
-import { computeState, SIDEREAL_MONTH, SYNODIC_MONTH, findNext } from './simulation.js';
-import { drawOverhead, clearTrail } from './overheadView.js';
+import {
+  computeState, dateToDay, dayToDate, findSynodic, findEclipse, newMoonBefore,
+  dayForSynodicInLunation, inEclipseSeason, wrap180, SYNODIC_MONTH,
+} from './simulation.js';
+import { drawOverhead, hitMoon, pointerToSynodic } from './overheadView.js';
 import { drawMoonView } from './moonView.js';
-import { setLang, getLang, applyStaticI18n, t } from './i18n.js';
-import { buildExplain, buildTiltNote, buildEclipseLine, buildWhy } from './learningTexts.js';
-import { buildQuestion } from './quiz.js';
+import { drawEclipseChart } from './eclipseChart.js';
+import { drawTimeline, timelineDayAt, yearData } from './timeline.js';
+import { setLang, getLang, initialLang, applyStaticI18n, t, tr, formatDateTime } from './i18n.js';
+import { buildExplainHtml, buildFaqHtml, buildGlossaryHtml, eclipseName, escapeHtml } from './learningTexts.js';
+import { buildQuestion, phaseChoices } from './quiz.js';
+import { MISSIONS, loadProgress, saveProgress, checkMissions } from './missions.js';
+import { phaseIconSVG, PHASE_SYNODIC } from './moonShape.js';
 import { initTheme, toggleTheme, currentTheme } from './theme.js';
 
+const HOUR = 1 / 24;
+const STATS_KEY = 'mpes-quiz';
+
 const state = {
-  day: 0,
+  day: dateToDay(new Date()),
   playing: false,
-  speed: 1,        // simulated days per wall-clock second
+  speed: 1,              // simulated days per second
   tilt: true,
+  mode: 'geo',
+  showGuide: true,
   zoom: 1,
   rotateDeg: 0,
+  autoPause: true,
+  // interaction
+  dragging: false,
+  hover: false,
+  everDragged: false,
+  dragLunation: 0,
+  dragPrevSyn: 0,
+  dragAccum: 0,
+  dragTurns: 0,
+  userActed: false,
+  tab: 'explain',
 };
 
+const quizStats = loadStats();
 let quiz = null;
+let progress = loadProgress();
+let nextEclipseCache = null;   // { from, tilt, ec }
+let lastSig = { explain: '', cal: '', missions: '', badge: '' };
+let current = null;            // latest computed state
 
 const el = id => document.getElementById(id);
 
+// ---------- init ----------
+
 function init() {
   initTheme();
-  setLang('ja');
-  applyStaticI18n();
+  setLang(initialLang());
+  readUrl();
+  el('langSelect').value = getLang();
+  refreshStatic();
 
   bindControls();
+  bindOverhead();
+  bindTimeline();
   bindTabs();
-  bindThemeLang();
-  newQuiz({ keepTime: true });  // prepare first quiz without jumping time
-  loop(performance.now());
+  bindLearn();
+  bindTopbar();
+  bindKeys();
+
+  setMode(state.mode, false);
+  el('tiltToggle').checked = state.tilt;
+  updateTilt();
+  newQuiz();
+  renderMissions();
+
+  let seen = null;
+  try { seen = localStorage.getItem('mpes-help-seen'); } catch { /* ignore */ }
+  if (!seen && !location.search) openHelp();
+
+  requestAnimationFrame(loop);
 }
 
-function bindControls() {
-  el('playBtn').addEventListener('click', togglePlay);
-  el('speedSelect').addEventListener('change', e => {
-    state.speed = parseFloat(e.target.value);
-  });
-  el('angleSlider').addEventListener('input', e => {
-    const angle = parseFloat(e.target.value);
-    // Preserve the current cycle count, just change within the current sidereal cycle.
-    const cycle = Math.floor(state.day / SIDEREAL_MONTH);
-    state.day = cycle * SIDEREAL_MONTH + (angle / 360) * SIDEREAL_MONTH;
-    syncDaySlider();
-    clearTrail();
-  });
-  el('daySlider').addEventListener('input', e => {
-    state.day = parseFloat(e.target.value);
-    syncAngleSlider();
-    clearTrail();
-  });
+function refreshStatic() {
+  applyStaticI18n();
+  document.title = t('app.title');
+  document.querySelectorAll('[data-icon]').forEach(n => { n.innerHTML = phaseIconSVG(n.dataset.icon, 22); });
+  el('faqBody').innerHTML = buildFaqHtml();
+  el('glossaryBody').innerHTML = buildGlossaryHtml();
+  updatePlayBtn();
+  updateTilt();
+  renderQuiz();
+  renderMissions();
+  renderStats();
+  lastSig = { explain: '', cal: '', missions: '', badge: '' };
+}
 
-  document.querySelectorAll('[data-jump]').forEach(btn => {
-    btn.addEventListener('click', () => jumpToPhase(btn.dataset.jump));
+// ---------- time helpers ----------
+
+function setDay(day, opts = {}) {
+  state.day = day;
+  state.quizPlaced = false;
+  nextEclipseCache = null;
+  if (!opts.keepPlaying) setPlaying(false);
+  if (opts.user !== false) state.userActed = true;
+}
+
+function setPlaying(on) {
+  state.playing = on;
+  if (on) state.quizPlaced = false;
+  updatePlayBtn();
+}
+
+function updatePlayBtn() {
+  el('playBtn').textContent = state.playing ? `⏸ ${t('ui.pause')}` : `▶ ${t('ui.play')}`;
+  el('playBtn').setAttribute('aria-pressed', String(state.playing));
+}
+
+function jumpToPhase(key) {
+  setDay(findSynodic(state.day, PHASE_SYNODIC[key], 1));
+}
+
+function jumpToEclipse(kind, dir, type = null) {
+  let from = state.day;
+  for (let i = 0; i < 40; i++) {
+    const ec = findEclipse(from, dir, kind, { tilt: state.tilt });
+    if (!ec) break;
+    if (!type || ec.type === type) { setDay(ec.day); return ec; }
+    from = ec.day;
+  }
+  toast(t('ui.notFound'));
+  return null;
+}
+
+// ---------- controls ----------
+
+function bindControls() {
+  el('playBtn').addEventListener('click', () => {
+    setPlaying(!state.playing);
+    if (state.playing) state.userActed = true;
   });
-  el('jumpSolar').addEventListener('click', () => jumpToEclipse('solar'));
-  el('jumpLunar').addEventListener('click', () => jumpToEclipse('lunar'));
+  el('speedSelect').addEventListener('change', e => { state.speed = parseFloat(e.target.value); });
+
+  document.querySelectorAll('[data-step]').forEach(b => {
+    b.addEventListener('click', () => setDay(state.day + parseFloat(b.dataset.step), { keepPlaying: true }));
+  });
+  el('dateInput').addEventListener('change', e => {
+    if (!e.target.value) return;
+    const [y, m, d] = e.target.value.split('-').map(Number);
+    const cur = dayToDate(state.day);
+    setDay(dateToDay(new Date(y, m - 1, d, cur.getHours(), cur.getMinutes())));
+  });
+  el('nowBtn').addEventListener('click', () => setDay(dateToDay(new Date())));
+
+  const slider = el('angleSlider');
+  let lunation = null;
+  slider.addEventListener('pointerdown', () => { state.sliderHeld = true; });
+  window.addEventListener('pointerup', () => { state.sliderHeld = false; });
+  slider.addEventListener('input', () => {
+    if (lunation == null) lunation = newMoonBefore(state.day);
+    setDay(dayForSynodicInLunation(lunation, parseFloat(slider.value)));
+  });
+  slider.addEventListener('change', () => { lunation = null; });
+
+  document.querySelectorAll('[data-jump]').forEach(b => b.addEventListener('click', () => jumpToPhase(b.dataset.jump)));
+  document.querySelectorAll('[data-eclipse]').forEach(b => {
+    b.addEventListener('click', () => jumpToEclipse(b.dataset.eclipse, parseInt(b.dataset.dir, 10)));
+  });
+  el('autoPause').addEventListener('change', e => {
+    state.autoPause = e.target.checked;
+    nextEclipseCache = null;
+  });
 
   el('tiltToggle').addEventListener('change', e => {
     state.tilt = e.target.checked;
+    state.userActed = true;
+    nextEclipseCache = null;
+    updateTilt();
   });
-  el('zoomSlider').addEventListener('input', e => {
-    state.zoom = parseFloat(e.target.value);
-  });
-  el('rotateSlider').addEventListener('input', e => {
-    state.rotateDeg = parseFloat(e.target.value);
-  });
+
+  el('guideToggle').addEventListener('change', e => { state.showGuide = e.target.checked; });
+  el('zoomSlider').addEventListener('input', e => { state.zoom = parseFloat(e.target.value); });
+  el('rotateSlider').addEventListener('input', e => { state.rotateDeg = parseFloat(e.target.value); });
   el('viewReset').addEventListener('click', () => {
     state.zoom = 1; state.rotateDeg = 0;
     el('zoomSlider').value = '1';
     el('rotateSlider').value = '0';
-    clearTrail();
+  });
+  document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+}
+
+function updateTilt() {
+  el('tiltState').textContent = state.tilt ? t('ui.tiltOn') : t('ui.tiltOff');
+}
+
+function setMode(mode, user = true) {
+  state.mode = mode;
+  document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
+  if (user) state.userActed = true;
+}
+
+// Drag the Moon around Earth in the overhead view.
+function bindOverhead() {
+  const cv = el('overhead');
+  const pos = e => {
+    const r = cv.getBoundingClientRect();
+    return [e.clientX - r.left, e.clientY - r.top];
+  };
+  cv.addEventListener('pointerdown', e => {
+    const [x, y] = pos(e);
+    if (!hitMoon(x, y)) return;
+    state.dragging = true;
+    state.everDragged = true;
+    state.dragLunation = newMoonBefore(state.day);
+    state.dragPrevSyn = current ? current.synodic : 0;
+    setPlaying(false);
+    document.activeElement?.blur?.();
+    cv.setPointerCapture(e.pointerId);
+    cv.classList.add('is-grabbing');
+    e.preventDefault();
+  });
+  cv.addEventListener('pointermove', e => {
+    const [x, y] = pos(e);
+    if (!state.dragging) {
+      state.hover = hitMoon(x, y);
+      cv.style.cursor = state.hover ? 'grab' : 'default';
+      return;
+    }
+    const syn = pointerToSynodic(x, y, current);
+    if (syn == null) return;
+    const d = wrap180(syn - state.dragPrevSyn);
+    // Crossing new moon moves into the next / previous lunation
+    if (state.dragPrevSyn > 270 && syn < 90) state.dragLunation = findSynodic(state.dragLunation + 1, 0, 1);
+    else if (state.dragPrevSyn < 90 && syn > 270) state.dragLunation = findSynodic(state.dragLunation - 1, 0, -1);
+    state.dragAccum += d;
+    state.dragTurns = Math.max(state.dragTurns, Math.abs(state.dragAccum) / 360);
+    state.dragPrevSyn = syn;
+    setDay(dayForSynodicInLunation(state.dragLunation, syn));
+  });
+  const end = e => {
+    if (!state.dragging) return;
+    state.dragging = false;
+    state.dragAccum = 0;
+    cv.classList.remove('is-grabbing');
+    if (cv.hasPointerCapture(e.pointerId)) cv.releasePointerCapture(e.pointerId);
+  };
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+  cv.addEventListener('pointerleave', () => { if (!state.dragging) state.hover = false; });
+  // Touch: only block page scrolling when the gesture starts on the Moon.
+  cv.addEventListener('touchstart', e => {
+    const r = cv.getBoundingClientRect();
+    const tch = e.touches[0];
+    if (tch && hitMoon(tch.clientX - r.left, tch.clientY - r.top)) e.preventDefault();
+  }, { passive: false });
+  // Wheel zooms only with Ctrl/⌘ (or a trackpad pinch), so the page still scrolls.
+  cv.addEventListener('wheel', e => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    state.zoom = Math.min(2.2, Math.max(0.6, state.zoom * (e.deltaY < 0 ? 1.08 : 1 / 1.08)));
+    el('zoomSlider').value = String(state.zoom);
+  }, { passive: false });
+}
+
+function bindTimeline() {
+  const cv = el('timeline');
+  let down = false;
+  const at = e => {
+    const r = cv.getBoundingClientRect();
+    setDay(timelineDayAt(e.clientX - r.left, r.width, state.day));
+  };
+  cv.addEventListener('pointerdown', e => {
+    down = true;
+    if (document.activeElement !== cv) document.activeElement?.blur?.();
+    cv.setPointerCapture(e.pointerId);
+    at(e);
+  });
+  cv.addEventListener('pointermove', e => { if (down) at(e); });
+  cv.addEventListener('pointerup', () => { down = false; });
+  cv.addEventListener('pointercancel', () => { down = false; });
+  cv.addEventListener('keydown', e => {
+    const steps = { ArrowRight: 1, ArrowLeft: -1, ArrowUp: 1, ArrowDown: -1, PageUp: SYNODIC_MONTH, PageDown: -SYNODIC_MONTH };
+    if (e.key in steps) {
+      e.preventDefault();
+      setDay(state.day + steps[e.key] * (e.shiftKey && Math.abs(steps[e.key]) === 1 ? 7 : 1));
+    }
+  });
+  el('yearPrev').addEventListener('click', () => shiftYear(-1));
+  el('yearNext').addEventListener('click', () => shiftYear(1));
+}
+
+function shiftYear(n) {
+  const d = dayToDate(state.day);
+  d.setFullYear(d.getFullYear() + n);
+  setDay(dateToDay(d));
+}
+
+function bindKeys() {
+  document.addEventListener('keydown', e => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (['input', 'select', 'textarea', 'button'].includes(tag) || e.target.isContentEditable) return;
+    if (e.target.id === 'timeline' || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === ' ') {
+      e.preventDefault();
+      setPlaying(!state.playing);
+    } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      const sign = e.key === 'ArrowRight' ? 1 : -1;
+      setDay(state.day + sign * (e.shiftKey ? 1 : HOUR), { keepPlaying: true });
+    }
   });
 }
+
+function bindTopbar() {
+  el('themeToggle').addEventListener('click', () => toggleTheme());
+  el('langSelect').addEventListener('change', e => {
+    setLang(e.target.value, true);
+    refreshStatic();
+  });
+  el('helpBtn').addEventListener('click', openHelp);
+  el('helpDialog').addEventListener('close', () => {
+    try { localStorage.setItem('mpes-help-seen', '1'); } catch { /* ignore */ }
+  });
+  el('shareBtn').addEventListener('click', shareLink);
+}
+
+function openHelp() {
+  const d = el('helpDialog');
+  if (typeof d.showModal === 'function') d.showModal();
+}
+
+// ---------- tabs ----------
 
 function bindTabs() {
   const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
-  const panels = { explain: el('tabExplain'), quiz: el('tabQuiz') };
-
-  function activateTab(tab) {
-    tabs.forEach(t => {
-      const active = t === tab;
-      t.classList.toggle('tab--active', active);
-      t.setAttribute('aria-selected', String(active));
-      t.tabIndex = active ? 0 : -1;
+  const activate = (tab, focus = true) => {
+    tabs.forEach(tb => {
+      const on = tb === tab;
+      tb.classList.toggle('tab--active', on);
+      tb.setAttribute('aria-selected', String(on));
+      tb.tabIndex = on ? 0 : -1;
+      el(`tab-${tb.dataset.tab}`).hidden = !on;
     });
-    const target = tab.dataset.tab;
-    for (const [key, panel] of Object.entries(panels)) {
-      const show = key === target;
-      panel.classList.toggle('tabpane--active', show);
-      panel.hidden = !show;
-    }
-    tab.focus();
-  }
-
-  tabs.forEach(tab => tab.addEventListener('click', () => activateTab(tab)));
-
-  // Arrow-key navigation (roving tabindex)
-  el('tabBtnExplain').parentElement.addEventListener('keydown', e => {
-    let idx = tabs.indexOf(document.activeElement);
-    if (idx < 0) return;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+    state.tab = tab.dataset.tab;
+    if (state.tab === 'quiz') applyQuizJump();
+    if (focus) tab.focus();
+  };
+  tabs.forEach(tb => tb.addEventListener('click', () => activate(tb)));
+  tabs[0].parentElement.addEventListener('keydown', e => {
+    const i = tabs.indexOf(document.activeElement);
+    if (i < 0) return;
+    const map = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: tabs.length - 1 };
+    if (e.key in map) {
       e.preventDefault();
-      activateTab(tabs[(idx + 1) % tabs.length]);
-    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      activateTab(tabs[(idx - 1 + tabs.length) % tabs.length]);
-    } else if (e.key === 'Home') {
-      e.preventDefault();
-      activateTab(tabs[0]);
-    } else if (e.key === 'End') {
-      e.preventDefault();
-      activateTab(tabs[tabs.length - 1]);
+      activate(tabs[(map[e.key] + tabs.length) % tabs.length]);
     }
   });
+}
 
-  el('quizNew').addEventListener('click', newQuiz);
+// ---------- learning panel ----------
+
+function bindLearn() {
   el('quizKind').addEventListener('change', newQuiz);
-}
-
-function bindThemeLang() {
-  el('themeToggle').addEventListener('click', () => {
-    toggleTheme();
+  el('quizNext').addEventListener('click', newQuiz);
+  el('quizDemo').addEventListener('click', () => quiz?.demo && runDemo(quiz.demo));
+  el('missionReset').addEventListener('click', () => {
+    progress = {};
+    saveProgress(progress);
+    state.dragTurns = 0;
+    renderMissions();
   });
-  el('langSelect').addEventListener('change', e => {
-    setLang(e.target.value);
-    applyStaticI18n();
-    document.title = t('app.title');
-    retranslateQuiz();
+  el('glossaryBody').addEventListener('click', e => {
+    const b = e.target.closest('[data-demo]');
+    if (b) runDemo(b.dataset.demo);
+  });
+  el('calList').addEventListener('click', e => {
+    const b = e.target.closest('[data-day]');
+    if (b) { setDay(parseFloat(b.dataset.day)); revealViews(); }
   });
 }
 
-function togglePlay() {
-  state.playing = !state.playing;
-  el('playBtn').textContent = state.playing ? t('ui.pause') : t('ui.play');
+function setTilt(on) {
+  state.tilt = on;
+  el('tiltToggle').checked = on;
+  nextEclipseCache = null;
+  updateTilt();
 }
 
-function jumpToPhase(which) {
-  const target = ({ new: 0, firstQuarter: 90, full: 180, lastQuarter: 270 })[which];
-  // Find nearest day ahead that matches this synodic angle.
-  // Search within one synodic month at 0.05-day resolution.
-  let best = state.day, bestDelta = Infinity;
-  for (let t = state.day; t < state.day + SYNODIC_MONTH + 1; t += 0.05) {
-    const s = computeState(t, { tilt: state.tilt });
-    let d = Math.abs(s.synodic - target);
-    if (d > 180) d = 360 - d;
-    if (d < bestDelta) { bestDelta = d; best = t; }
-    if (d < 0.2) break;
+function runDemo(code) {
+  const [kind, arg] = code.split(':');
+  // Demos of real eclipses need the real (tilted) orbit.
+  if (['eclipse', 'solar', 'lunar', 'totalLunar', 'penumbral', 'annular', 'helio'].includes(kind) ||
+      (kind === 'mode' && arg === 'helio')) setTilt(true);
+  switch (kind) {
+    case 'phase': jumpToPhase(arg); break;
+    case 'mode': setMode(arg); break;
+    case 'helio': setMode('helio'); setPlaying(true); el('speedSelect').value = '4'; state.speed = 4; break;
+    case 'guide': setMode('geo'); state.showGuide = true; el('guideToggle').checked = true; break;
+    case 'eclipse': jumpToEclipse(arg, 1); break;
+    case 'solar': jumpToEclipse('solar', 1); break;
+    case 'lunar': jumpToEclipse('lunar', 1); break;
+    case 'totalLunar': jumpToEclipse('lunar', 1, 'total'); break;
+    case 'penumbral': jumpToEclipse('lunar', 1, 'penumbral'); break;
+    case 'annular': jumpToEclipse('solar', 1, 'annular'); break;
+    case 'tiltOffSolar':
+      setTilt(false);
+      jumpToPhase('new');
+      break;
+    default: break;
   }
-  state.day = best;
-  syncAngleSlider(); syncDaySlider();
-  clearTrail();
+  revealViews();
 }
 
-function jumpToEclipse(kind) {
-  // Solar eclipses only happen around 2x/yr on average — widen the search.
-  const maxDays = kind === 'solar' ? 900 : 500;
-  const next = findNext(state.day + 0.2, { tilt: state.tilt },
-    s => s.eclipse.kind === kind && s.eclipse.possible,
-    maxDays, 0.05);
-  if (next == null) return;
-  state.day = next;
-  syncAngleSlider(); syncDaySlider();
-  clearTrail();
-}
-
-function syncAngleSlider() {
-  const angle = ((state.day / SIDEREAL_MONTH) * 360) % 360;
-  el('angleSlider').value = angle.toFixed(1);
-}
-function syncDaySlider() {
-  const max = parseFloat(el('daySlider').max);
-  if (state.day > max) {
-    el('daySlider').max = String(Math.ceil(state.day + 30));
-  }
-  el('daySlider').value = state.day.toFixed(1);
-}
-
-let last = performance.now();
-function loop(now) {
-  const dt = (now - last) / 1000;
-  last = now;
-  if (state.playing) {
-    state.day += dt * state.speed;
-    syncAngleSlider(); syncDaySlider();
-  }
-
-  const s = computeState(state.day, { tilt: state.tilt });
-  render(s);
-  requestAnimationFrame(loop);
-}
-
-function render(s) {
-  // Readouts
-  el('angleOut').textContent = `${(((state.day / SIDEREAL_MONTH) * 360) % 360).toFixed(1)}°`;
-  el('dayOut').textContent   = state.day.toFixed(1);
-  el('phaseName').textContent = t(`phase.${s.phaseKey}`);
-  el('moonAge').textContent   = s.moonAge.toFixed(1);
-  el('phaseAngle').textContent = `${(s.phaseAngle * 180 / Math.PI).toFixed(1)}°`;
-  el('illum').textContent      = `${Math.round(s.illumFrac * 100)}%`;
-
-  // Canvases
-  drawOverhead(el('overhead'), s, {
-    theme: currentTheme(),
-    zoom: state.zoom,
-    rotateDeg: state.rotateDeg,
-  });
-  drawMoonView(el('moonView'), s);
-
-  // Learning panel
-  const explainHtml = `
-    <h4>${t('explain.title')}</h4>
-    <p>${escapeHtml(buildExplain(s))}</p>
-    <p>${escapeHtml(buildTiltNote(state.tilt))}</p>
-    <p>${escapeHtml(t('explain.hint'))}</p>
-  `;
-  el('explainBody').innerHTML = explainHtml;
-
-  // Why-not-every-month
-  const why = buildWhy();
-  el('hintBody').innerHTML =
-    `<strong>${escapeHtml(why.title)}</strong><br>${escapeHtml(why.body)}`;
-
-  // Eclipse banner
-  const line = buildEclipseLine(s.eclipse);
-  const banner = el('eclipseBanner');
-  if (line) {
-    banner.hidden = false;
-    banner.textContent = line;
-  } else {
-    banner.hidden = true;
-    banner.textContent = '';
+function revealViews() {
+  if (window.innerWidth <= 1280) {
+    document.querySelector('.panel--views').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 }
 
-function newQuiz(opts = {}) {
-  const kind = el('quizKind').value;
-  quiz = buildQuestion(kind, computeState(state.day, { tilt: state.tilt }),
-    { useCurrentPhase: !!opts.keepTime });
-  el('quizQuestion').textContent = quiz.text;
-  el('quizFeedback').textContent = '';
-  const choices = el('quizChoices');
-  choices.innerHTML = '';
+// Quiz ------------------------------------------------------------------
+
+function loadStats() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STATS_KEY) || '{}');
+    return { ok: 0, total: 0, streak: 0, best: s.best || 0, lifetimeOk: s.lifetimeOk || 0 };
+  } catch { return { ok: 0, total: 0, streak: 0, best: 0, lifetimeOk: 0 }; }
+}
+function saveStats() {
+  try { localStorage.setItem(STATS_KEY, JSON.stringify({ best: quizStats.best, lifetimeOk: quizStats.lifetimeOk })); } catch { /* ignore */ }
+}
+
+function newQuiz() {
+  quiz = buildQuestion(el('quizKind').value);
+  quiz.answered = false;
+  quiz.chosen = null;
+  quiz.pendingJump = quiz.setPhase != null;
+  if (state.tab === 'quiz') applyQuizJump();
+  renderQuiz();
+}
+
+// Phase questions move the simulation to the phase being asked about — but
+// only once the quiz tab is actually open.
+function applyQuizJump() {
+  if (!quiz?.pendingJump) return;
+  quiz.pendingJump = false;
+  // Land somewhere inside the phase's range, not always on the same angle.
+  const jitter = quiz.setPhase === 'new' ? 4 : (Math.random() - 0.5) * 14;
+  state.day = findSynodic(state.day, PHASE_SYNODIC[quiz.setPhase] + jitter, 1);
+  state.quizPlaced = true;      // set by the quiz, not by the learner
+  nextEclipseCache = null;
+  setPlaying(false);
+}
+
+function quizHides() {
+  return quiz && !quiz.answered && state.tab === 'quiz' && quiz.setPhase != null;
+}
+
+function renderQuiz() {
+  if (!quiz) return;
+  el('quizQuestion').textContent = quiz.text();
+  const box = el('quizChoices');
+  box.innerHTML = '';
   for (const c of quiz.choices) {
     const b = document.createElement('button');
     b.className = 'btn';
     b.type = 'button';
-    b.textContent = c.label;
-    b.addEventListener('click', () => answerQuiz(b, c.key));
-    choices.appendChild(b);
-  }
-  // If the question targets a specific layout, advance the simulation
-  if (quiz.targetSynodic != null && !opts.keepTime) {
-    let best = state.day, bestDelta = Infinity;
-    for (let t2 = state.day; t2 < state.day + SYNODIC_MONTH + 1; t2 += 0.05) {
-      const s = computeState(t2, { tilt: state.tilt });
-      let d = Math.abs(s.synodic - quiz.targetSynodic);
-      if (d > 180) d = 360 - d;
-      if (d < bestDelta) { bestDelta = d; best = t2; }
-      if (d < 0.2) break;
+    b.innerHTML = `${c.icon ? phaseIconSVG(c.icon, 26) : ''}<span>${escapeHtml(c.label())}</span>`;
+    if (quiz.answered) {
+      b.disabled = true;
+      if (c.key === quiz.answer) b.dataset.state = 'ok';
+      else if (c.key === quiz.chosen) b.dataset.state = 'ng';
     }
-    state.day = best;
-    syncAngleSlider(); syncDaySlider(); clearTrail();
+    b.addEventListener('click', () => answerQuiz(c.key));
+    box.appendChild(b);
+  }
+  const res = el('quizResult');
+  res.hidden = !quiz.answered;
+  if (quiz.answered) {
+    const ok = quiz.chosen === quiz.answer;
+    const fb = el('quizFeedback');
+    const ans = quiz.choices.find(c => c.key === quiz.answer);
+    const ansLabel = ans ? ans.label() : t(`phase.${quiz.answer}`);
+    fb.textContent = ok ? `🎉 ${t('quiz.correct')}` : t('quiz.wrong', { answer: ansLabel });
+    fb.className = `quiz__feedback ${ok ? 'is-ok' : 'is-ng'}`;
+    el('quizWhy').textContent = quiz.why(quiz.answer);
+    el('quizDemo').hidden = !quiz.demo;
+  }
+  renderStats();
+}
+
+function answerQuiz(key) {
+  if (!quiz || quiz.answered) return;
+  // Judge phase questions against the shape that is on screen now.
+  if (quiz.setPhase && current) syncQuizChoices(current);
+  quiz.answered = true;
+  quiz.chosen = key;
+  const ok = key === quiz.answer;
+  quizStats.total++;
+  if (ok) {
+    quizStats.ok++;
+    quizStats.lifetimeOk++;
+    quizStats.streak++;
+    quizStats.best = Math.max(quizStats.best, quizStats.streak);
+    if (quizStats.streak >= 3 && quizStats.streak % 3 === 0) confetti();
+  } else {
+    quizStats.streak = 0;
+  }
+  saveStats();
+  state.userActed = true;
+  renderQuiz();
+  el('quizNext').focus();
+}
+
+function renderStats() {
+  el('quizScore').textContent = t('quiz.score', { ok: quizStats.ok, total: quizStats.total });
+  el('quizStreak').textContent = `🔥 ${t('quiz.streak', { n: quizStats.streak })}`;
+  el('quizBest').textContent = `🏆 ${t('quiz.best', { n: quizStats.best })}`;
+}
+
+// Missions --------------------------------------------------------------
+
+function renderMissions() {
+  const done = MISSIONS.filter(m => progress[m.id]).length;
+  el('missionCount').textContent = `${done}/${MISSIONS.length}`;
+  el('missionProgress').textContent = t('mission.progress', { done, total: MISSIONS.length });
+  el('missionBar').style.width = `${(done / MISSIONS.length) * 100}%`;
+  el('missionList').innerHTML = MISSIONS.map((m, i) => {
+    const ok = !!progress[m.id];
+    return `<li class="mission ${ok ? 'mission--done' : ''}">
+      <span class="mission__mark">${ok ? '✓' : i + 1}</span>
+      <span class="mission__title">${escapeHtml(tr(m.title))}</span>
+      ${ok ? '' : `<details><summary>${escapeHtml(t('mission.hint'))}</summary>${escapeHtml(tr(m.hint))}</details>`}
+    </li>`;
+  }).join('');
+}
+
+function updateMissions(s) {
+  // Positions placed by a quiz question don't count — and a toast would
+  // give the hidden answer away.
+  if (!state.userActed || state.quizPlaced || quizHides()) return;
+  const ctx = {
+    tilt: state.tilt,
+    mode: state.mode,
+    season: s.tilt && inEclipseSeason(s.sunLon, s.nodeLon),
+    dragTurns: state.dragTurns,
+    quizCorrect: quizStats.lifetimeOk,
+  };
+  const newly = checkMissions(s, ctx, progress);
+  if (!newly.length) return;
+  renderMissions();
+  const all = MISSIONS.every(m => progress[m.id]);
+  toast(all ? t('mission.all') : `🏅 ${t('mission.cleared', { title: tr(newly[0].title) })}`);
+  confetti();
+}
+
+// Eclipse calendar ------------------------------------------------------
+
+function renderCalendar(s) {
+  const year = dayToDate(s.day).getFullYear();
+  const data = yearData(year, state.tilt);
+  const curEc = data.eclipses.find(ec => Math.abs(ec.day - s.day) < 0.3);
+  const sig = `${year}|${state.tilt}|${getLang()}|${curEc ? curEc.day : ''}`;
+  if (sig === lastSig.cal) return;
+  lastSig.cal = sig;
+  el('calTitle').textContent = t('cal.title', { year });
+  el('calNote').textContent = state.tilt ? t('cal.note') : t('cal.noTilt');
+  el('calList').innerHTML = data.eclipses.length ? data.eclipses.map(ec => `
+    <li class="${ec === curEc ? 'is-current' : ''}">
+      <span class="cal__ico cal__ico--${ec.kind}"></span>
+      <span><span class="cal__name">${escapeHtml(eclipseName(ec))}</span><br>
+        <span class="cal__date">${escapeHtml(formatDateTime(dayToDate(ec.day), { weekday: true }))}</span></span>
+      <button class="btn btn--small" type="button" data-day="${ec.day}">${escapeHtml(t('cal.go'))}</button>
+    </li>`).join('') : `<li><span></span><span>${escapeHtml(t('cal.none'))}</span></li>`;
+}
+
+// ---------- share link ----------
+
+function readUrl() {
+  const p = new URLSearchParams(location.search);
+  const tt = p.get('t');
+  if (tt) {
+    const d = new Date(tt);
+    if (!Number.isNaN(d.getTime())) state.day = dateToDay(d);
+  }
+  if (p.get('tilt') === '0') state.tilt = false;
+  if (p.get('mode') === 'helio') state.mode = 'helio';
+  if (p.get('lang') === 'en' || p.get('lang') === 'ja') setLang(p.get('lang'), false);
+}
+
+async function shareLink() {
+  const url = new URL(location.href);
+  url.search = '';
+  url.searchParams.set('t', dayToDate(state.day).toISOString());
+  if (!state.tilt) url.searchParams.set('tilt', '0');
+  if (state.mode !== 'geo') url.searchParams.set('mode', state.mode);
+  url.searchParams.set('lang', getLang());
+  try {
+    await navigator.clipboard.writeText(url.toString());
+    toast(t('ui.shared'));
+  } catch {
+    window.prompt(t('ui.share'), url.toString());
   }
 }
 
-function retranslateQuiz() {
-  if (!quiz) return;
-  // Re-translate question text
-  if (quiz.kind === 'phaseName') quiz.text = t('q.phaseName');
-  else if (quiz.kind === 'layoutToPhase') quiz.text = t('q.layout');
-  else if (quiz.kind === 'eclipseCond') quiz.text = t('q.eclipse');
-  el('quizQuestion').textContent = quiz.text;
-  // Re-translate choice labels
-  for (const c of quiz.choices) {
-    if (quiz.kind === 'eclipseCond') {
-      c.label = t(`q.eclipse.${c.key}`);
+// ---------- feedback ----------
+
+let toastTimer = null;
+function toast(msg) {
+  const n = el('toast');
+  n.textContent = msg;
+  n.hidden = false;
+  n.style.animation = 'none';
+  void n.offsetWidth;
+  n.style.animation = '';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { n.hidden = true; }, 2800);
+}
+
+function confetti() {
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+  const box = el('confetti');
+  const colors = ['#ffb347', '#ff7a4a', '#7390ff', '#5fd39a', '#ffe08a', '#f4f1e4'];
+  for (let i = 0; i < 40; i++) {
+    const c = document.createElement('i');
+    c.style.left = `${Math.random() * 100}%`;
+    c.style.background = colors[i % colors.length];
+    c.style.setProperty('--dx', `${(Math.random() - 0.5) * 200}px`);
+    c.style.setProperty('--rot', `${Math.random() * 720}deg`);
+    c.style.animationDelay = `${Math.random() * 0.3}s`;
+    box.appendChild(c);
+    setTimeout(() => c.remove(), 2000);
+  }
+}
+
+// ---------- render loop ----------
+
+function fitCanvas(canvas) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const r = canvas.getBoundingClientRect();
+  const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (state.playing) advance(dt * state.speed);
+
+  current = computeState(state.day, { tilt: state.tilt });
+  render(current);
+  requestAnimationFrame(loop);
+}
+
+// Move time forward, stopping at the moment of greatest eclipse if asked.
+function advance(dd) {
+  const from = state.day, to = from + dd;
+  if (state.autoPause) {
+    const c = nextEclipseCache;
+    if (!c || c.tilt !== state.tilt || c.from > from || (c.ec && c.ec.day < from)) {
+      nextEclipseCache = { from, tilt: state.tilt, ec: findEclipse(from, 1, 'any', { tilt: state.tilt }) };
+    }
+    const ec = nextEclipseCache.ec;
+    if (ec && ec.day <= to) {
+      state.day = ec.day;
+      nextEclipseCache = null;
+      setPlaying(false);
+      toast(`⏸ ${t('eclipse.paused', { name: eclipseName(ec) })}`);
+      return;
+    }
+  }
+  state.day = to;
+}
+
+// If the learner moves the Moon during a phase question, keep the shape on
+// screen among the choices (replacing the shape that is no longer shown).
+function syncQuizChoices(s) {
+  if (!quizHides() || quiz.pendingJump || quiz.answer === s.phaseKey) return;
+  const key = s.phaseKey;
+  // Redraw all choices so the changed button doesn't give the answer away.
+  if (!quiz.choices.some(c => c.key === key)) quiz.choices = phaseChoices(key, quiz.kind === 'layoutToPhase');
+  quiz.answer = key;
+  renderQuiz();
+}
+
+function render(s) {
+  syncQuizChoices(s);
+  const hideNames = quizHides();
+  const hideMoon = hideNames && quiz.kind === 'layoutToPhase';
+
+  // Readouts
+  const date = dayToDate(state.day);
+  el('dateOut').textContent = formatDateTime(date, { weekday: true });
+  const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  if (document.activeElement !== el('dateInput') && el('dateInput').value !== iso) el('dateInput').value = iso;
+  if (!state.sliderHeld) el('angleSlider').value = s.synodic.toFixed(1);
+  el('angleOut').textContent = hideNames ? t('cv.hidden') : `${Math.round(s.synodic) % 360}°`;
+  el('yearLabel').textContent = String(date.getFullYear());
+
+  el('infoPhase').textContent = hideNames ? t('cv.hidden') : t(`phase.${s.phaseKey}`);
+  el('infoAge').textContent = hideNames ? t('cv.hidden') : s.moonAge.toFixed(1);
+  el('infoIllum').textContent = hideNames ? t('cv.hidden') : `${Math.round(s.illumFrac * 100)}%`;
+  el('infoElong').textContent = hideNames ? t('cv.hidden') : `${Math.round(s.synodic) % 360}°`;
+  el('infoLat').textContent = `${s.moonLatDeg >= 0 ? '+' : ''}${s.moonLatDeg.toFixed(2)}°`;
+  el('infoDist').textContent = getLang() === 'ja'
+    ? `${(s.moonDistKm / 10000).toFixed(1)}万km`
+    : `${Math.round(s.moonDistKm / 1000)}k km`;
+  const tl = el('timeline');
+  const y0 = new Date(date.getFullYear(), 0, 1);
+  tl.setAttribute('aria-valuemin', '1');
+  tl.setAttribute('aria-valuemax', String(Math.round((new Date(date.getFullYear() + 1, 0, 1) - y0) / 864e5)));
+  tl.setAttribute('aria-valuenow', String(Math.floor((date - y0) / 864e5) + 1));
+  tl.setAttribute('aria-valuetext', formatDateTime(date));
+
+  // Canvases
+  const ov = el('overhead');
+  drawOverhead(ov, s, {
+    fit: fitCanvas(ov),
+    mode: state.mode,
+    zoom: state.zoom,
+    rotateDeg: state.rotateDeg,
+    showGuide: state.showGuide && !hideMoon,
+    hideNames,
+    dragging: state.dragging,
+    hover: state.hover,
+    everDragged: state.everDragged,
+  });
+  const mv = el('moonView');
+  drawMoonView(mv, s, { fit: fitCanvas(mv), hidden: hideMoon });
+  const ch = el('chart');
+  drawEclipseChart(ch, s, { fit: fitCanvas(ch), hideNames });
+  drawTimeline(tl, state.day, state.tilt, { fit: fitCanvas(tl), theme: currentTheme() });
+
+  // Eclipse badge + banner
+  const ec = s.eclipse;
+  const badgeSig = ec.possible ? `${ec.kind}.${ec.type}.${getLang()}` : '';
+  if (badgeSig !== lastSig.badge) {
+    lastSig.badge = badgeSig;
+    const badge = el('eclipseBadge');
+    const banner = el('eclipseBanner');
+    if (ec.possible) {
+      const name = eclipseName(ec);
+      badge.hidden = false;
+      badge.className = `badge badge--${ec.kind}`;
+      badge.textContent = `${ec.kind === 'solar' ? '☀️' : '🌕'} ${t('eclipse.now', { name })}`;
+      banner.hidden = false;
+      banner.className = `banner banner--${ec.kind}`;
+      banner.innerHTML = `<strong>${escapeHtml(t('eclipse.now', { name }))}</strong><p>${escapeHtml(t(`eclipse.desc.${ec.kind}.${ec.type}`))}</p>`;
     } else {
-      c.label = t(`phase.${c.key}`);
+      badge.hidden = true;
+      banner.hidden = true;
     }
   }
-  // Update button text
-  const buttons = el('quizChoices').children;
-  for (let i = 0; i < buttons.length; i++) {
-    buttons[i].textContent = quiz.choices[i].label;
-  }
-  // Re-translate feedback if present
-  const fb = el('quizFeedback').textContent;
-  if (fb) {
-    // Check if it was correct or wrong by looking at existing button states
-    const hasOk = Array.from(buttons).some(b => b.dataset.state === 'ok');
-    const hasNg = Array.from(buttons).some(b => b.dataset.state === 'ng');
-    if (hasNg) el('quizFeedback').textContent = t('quiz.wrong');
-    else if (hasOk) el('quizFeedback').textContent = t('quiz.correct');
-  }
-}
 
-function answerQuiz(btn, chosen) {
-  const ok = chosen === quiz.answer;
-  btn.dataset.state = ok ? 'ok' : 'ng';
-  el('quizFeedback').textContent = ok ? t('quiz.correct') : t('quiz.wrong');
-  if (!ok) {
-    // highlight correct
-    const kids = el('quizChoices').children;
-    for (const k of kids) {
-      if (k.textContent === labelForAnswer()) k.dataset.state = 'ok';
+  // Explanation cards (only rebuilt when something visible changes)
+  if (state.tab === 'explain') {
+    const sig = [s.phaseKey, s.synodic.toFixed(0), s.moonLatDeg.toFixed(2), s.moonAge.toFixed(1),
+      ec.kind, ec.type, state.tilt, getLang(), hideNames, Math.round(s.transitHour)].join('|');
+    if (sig !== lastSig.explain) {
+      lastSig.explain = sig;
+      el('explainBody').innerHTML = buildExplainHtml(s, { hideNames, tilt: state.tilt });
     }
+  } else {
+    lastSig.explain = '';
   }
-}
+  if (state.tab === 'calendar') renderCalendar(s);
+  else lastSig.cal = '';
 
-function labelForAnswer() {
-  const found = quiz.choices.find(c => c.key === quiz.answer);
-  return found ? found.label : '';
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, ch => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[ch]));
+  updateMissions(s);
 }
 
 init();
