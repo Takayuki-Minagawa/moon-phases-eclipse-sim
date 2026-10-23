@@ -199,7 +199,7 @@ body {
 @media (min-width: 560px) and (max-width: 900px) {
   .canvas-wrap--fill { aspect-ratio: 4 / 3; }
 }
-#overhead { touch-action: none; cursor: grab; }
+#overhead { cursor: grab; }
 #overhead.is-grabbing { cursor: grabbing; }
 #timeline { cursor: pointer; touch-action: pan-y; border-radius: 8px; }
 #timeline:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
