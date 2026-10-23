@@ -143,7 +143,14 @@ export function ephemeris(day) {
 // Moon–Sun ecliptic longitude difference: 0 = new, 90 = first quarter, ...
 export function synodicAt(day) {
   const e = ephemeris(day);
-  return normalizeDeg(e.moonLon - e.sunLon);
+  return synodicOf(e);
+}
+
+// Synodic angle in [0, 360). Values a hair below 360 (as left by the
+// new-moon search) are snapped to 0 so a new moon reads as age 0, not 29.5.
+function synodicOf(e) {
+  const s = normalizeDeg(e.moonLon - e.sunLon);
+  return s > 360 - 1e-6 ? 0 : s;
 }
 
 // Time of the last new moon at or before `day`.
@@ -250,7 +257,7 @@ export function computeState(day, opts = {}) {
   const tilt = opts.tilt !== false;
   const e = ephemeris(day);
   const moonLat = tilt ? e.moonLat : 0;
-  const synodic = normalizeDeg(e.moonLon - e.sunLon);
+  const synodic = synodicOf(e);
 
   const elongDeg = angSep(synodic, moonLat);
   const R = e.sunDistAU * AU_KM;

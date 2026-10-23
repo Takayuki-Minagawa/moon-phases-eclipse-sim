@@ -54,6 +54,15 @@ export const MESSAGES = {
     'ui.reset':     '視点リセット',
     'ui.keys':      'キーボード: Space 再生/停止・← → 1時間・Shift+← → 1日',
     'ui.year':      '年',
+    'aria.views':   '可視化ビュー',
+    'aria.mode':    '表示モード',
+    'aria.overhead':'俯瞰ビュー：ドラッグで月を動かせます',
+    'aria.moon':    '地球から見た月の様子',
+    'aria.chart':   '食の判定図',
+    'aria.timeline':'1年のタイムライン（← → で1日、PageUp/PageDown で1か月）',
+    'aria.prevYear':'前の年',
+    'aria.nextYear':'次の年',
+    'aria.date':    '日付',
     'ui.close':     '閉じる',
     'ui.start':     'はじめる',
 
@@ -121,11 +130,11 @@ export const MESSAGES = {
     'phase.new':            '新月',
     'phase.waxingCrescent': '三日月',
     'phase.firstQuarter':   '上弦の月',
-    'phase.waxingGibbous':  '十三夜',
+    'phase.waxingGibbous':  '満ちていく凸月',
     'phase.full':           '満月',
-    'phase.waningGibbous':  '十六夜',
+    'phase.waningGibbous':  '欠けていく凸月',
     'phase.lastQuarter':    '下弦の月',
-    'phase.waningCrescent': '二十六夜',
+    'phase.waningCrescent': '有明の細い月',
 
     'eclipse.solar.total':    '皆既日食',
     'eclipse.solar.annular':  '金環日食',
@@ -262,6 +271,15 @@ export const MESSAGES = {
     'ui.reset':     'Reset view',
     'ui.keys':      'Keys: Space play/pause · ← → 1 hour · Shift+← → 1 day',
     'ui.year':      'Year',
+    'aria.views':   'Visualisations',
+    'aria.mode':    'View mode',
+    'aria.overhead':'Overhead view: drag the Moon to move it',
+    'aria.moon':    'The Moon as seen from Earth',
+    'aria.chart':   'Eclipse check chart',
+    'aria.timeline':'One-year timeline (← → one day, PageUp/PageDown one month)',
+    'aria.prevYear':'Previous year',
+    'aria.nextYear':'Next year',
+    'aria.date':    'Date',
     'ui.close':     'Close',
     'ui.start':     'Get started',
 
@@ -296,7 +314,7 @@ export const MESSAGES = {
     'cv.west':      'W',
     'cv.skyAt':     'Southern sky · around {h}',
     'cv.newMoonSky':'New moon: same direction as the Sun — invisible',
-    'cv.northHemi': 'As seen from the Northern Hemisphere',
+    'cv.northHemi': 'Northern Hemisphere view',
     'cv.solarView': 'Seen from the best spot on Earth',
     'cv.chart.solar':'Around the Sun (new moon)',
     'cv.chart.lunar':'Around Earth’s shadow (full moon)',
@@ -348,7 +366,7 @@ export const MESSAGES = {
     'eclipse.desc.lunar.partial':  'Part of the full Moon is inside Earth’s umbra and looks bitten.',
     'eclipse.desc.lunar.penumbral':'The Moon is only in the penumbra — a subtle dimming that is easy to miss.',
     'eclipse.now':   '{name} in progress!',
-    'eclipse.paused':'Paused at a {name}',
+    'eclipse.paused':'Paused: {name}',
 
     'mission.progress': '{done} / {total} done',
     'mission.hint':     'Hint',
@@ -412,7 +430,7 @@ export const MESSAGES = {
     'ex.c2.ok':     'Latitude {lat}° → inside',
     'ex.c2.ng':     'Latitude {lat}° → too far',
     'ex.c2.noTilt': 'Tilt is OFF — the Moon always stays on the ecliptic',
-    'ex.res.yes':   'Both conditions are met — a {name} is happening!',
+    'ex.res.yes':   'Both conditions are met: {name} in progress!',
     'ex.res.no':    'The conditions aren’t both met, so there is no eclipse now.',
     'ex.newWord':   'new moon',
     'ex.fullWord':  'full moon',
@@ -422,10 +440,12 @@ export const MESSAGES = {
 const LANG_KEY = 'mpes-lang';
 let currentLang = 'ja';
 
-export function setLang(lang) {
+export function setLang(lang, persist = false) {
   currentLang = MESSAGES[lang] ? lang : 'ja';
   document.documentElement.lang = currentLang;
-  try { localStorage.setItem(LANG_KEY, currentLang); } catch { /* ignore */ }
+  if (persist) {
+    try { localStorage.setItem(LANG_KEY, currentLang); } catch { /* ignore */ }
+  }
 }
 export function getLang() { return currentLang; }
 

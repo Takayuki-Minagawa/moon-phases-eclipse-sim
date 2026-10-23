@@ -97,6 +97,7 @@ function refreshStatic() {
 
 function setDay(day, opts = {}) {
   state.day = day;
+  state.quizPlaced = false;
   nextEclipseCache = null;
   if (!opts.keepPlaying) setPlaying(false);
   if (opts.user !== false) state.userActed = true;
@@ -104,6 +105,7 @@ function setDay(day, opts = {}) {
 
 function setPlaying(on) {
   state.playing = on;
+  if (on) state.quizPlaced = false;
   updatePlayBtn();
 }
 
@@ -150,6 +152,8 @@ function bindControls() {
 
   const slider = el('angleSlider');
   let lunation = null;
+  slider.addEventListener('pointerdown', () => { state.sliderHeld = true; });
+  window.addEventListener('pointerup', () => { state.sliderHeld = false; });
   slider.addEventListener('input', () => {
     if (lunation == null) lunation = newMoonBefore(state.day);
     setDay(dayForSynodicInLunation(lunation, parseFloat(slider.value)));
@@ -160,7 +164,10 @@ function bindControls() {
   document.querySelectorAll('[data-eclipse]').forEach(b => {
     b.addEventListener('click', () => jumpToEclipse(b.dataset.eclipse, parseInt(b.dataset.dir, 10)));
   });
-  el('autoPause').addEventListener('change', e => { state.autoPause = e.target.checked; });
+  el('autoPause').addEventListener('change', e => {
+    state.autoPause = e.target.checked;
+    nextEclipseCache = null;
+  });
 
   el('tiltToggle').addEventListener('change', e => {
     state.tilt = e.target.checked;
@@ -205,6 +212,7 @@ function bindOverhead() {
     state.dragLunation = newMoonBefore(state.day);
     state.dragPrevSyn = current ? current.synodic : 0;
     setPlaying(false);
+    document.activeElement?.blur?.();
     cv.setPointerCapture(e.pointerId);
     cv.classList.add('is-grabbing');
     e.preventDefault();
@@ -237,7 +245,15 @@ function bindOverhead() {
   cv.addEventListener('pointerup', end);
   cv.addEventListener('pointercancel', end);
   cv.addEventListener('pointerleave', () => { if (!state.dragging) state.hover = false; });
+  // Touch: only block page scrolling when the gesture starts on the Moon.
+  cv.addEventListener('touchstart', e => {
+    const r = cv.getBoundingClientRect();
+    const tch = e.touches[0];
+    if (tch && hitMoon(tch.clientX - r.left, tch.clientY - r.top)) e.preventDefault();
+  }, { passive: false });
+  // Wheel zooms only with Ctrl/⌘ (or a trackpad pinch), so the page still scrolls.
   cv.addEventListener('wheel', e => {
+    if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     state.zoom = Math.min(2.2, Math.max(0.6, state.zoom * (e.deltaY < 0 ? 1.08 : 1 / 1.08)));
     el('zoomSlider').value = String(state.zoom);
@@ -251,7 +267,12 @@ function bindTimeline() {
     const r = cv.getBoundingClientRect();
     setDay(timelineDayAt(e.clientX - r.left, r.width, state.day));
   };
-  cv.addEventListener('pointerdown', e => { down = true; cv.setPointerCapture(e.pointerId); at(e); });
+  cv.addEventListener('pointerdown', e => {
+    down = true;
+    if (document.activeElement !== cv) document.activeElement?.blur?.();
+    cv.setPointerCapture(e.pointerId);
+    at(e);
+  });
   cv.addEventListener('pointermove', e => { if (down) at(e); });
   cv.addEventListener('pointerup', () => { down = false; });
   cv.addEventListener('pointercancel', () => { down = false; });
@@ -291,7 +312,7 @@ function bindKeys() {
 function bindTopbar() {
   el('themeToggle').addEventListener('click', () => toggleTheme());
   el('langSelect').addEventListener('change', e => {
-    setLang(e.target.value);
+    setLang(e.target.value, true);
     refreshStatic();
   });
   el('helpBtn').addEventListener('click', openHelp);
@@ -356,8 +377,18 @@ function bindLearn() {
   });
 }
 
+function setTilt(on) {
+  state.tilt = on;
+  el('tiltToggle').checked = on;
+  nextEclipseCache = null;
+  updateTilt();
+}
+
 function runDemo(code) {
   const [kind, arg] = code.split(':');
+  // Demos of real eclipses need the real (tilted) orbit.
+  if (['eclipse', 'solar', 'lunar', 'totalLunar', 'penumbral', 'annular', 'helio'].includes(kind) ||
+      (kind === 'mode' && arg === 'helio')) setTilt(true);
   switch (kind) {
     case 'phase': jumpToPhase(arg); break;
     case 'mode': setMode(arg); break;
@@ -370,9 +401,7 @@ function runDemo(code) {
     case 'penumbral': jumpToEclipse('lunar', 1, 'penumbral'); break;
     case 'annular': jumpToEclipse('solar', 1, 'annular'); break;
     case 'tiltOffSolar':
-      state.tilt = false;
-      el('tiltToggle').checked = false;
-      updateTilt();
+      setTilt(false);
       jumpToPhase('new');
       break;
     default: break;
@@ -415,6 +444,7 @@ function applyQuizJump() {
   // Land somewhere inside the phase's range, not always on the same angle.
   const jitter = quiz.setPhase === 'new' ? 4 : (Math.random() - 0.5) * 14;
   state.day = findSynodic(state.day, PHASE_SYNODIC[quiz.setPhase] + jitter, 1);
+  state.quizPlaced = true;      // set by the quiz, not by the learner
   nextEclipseCache = null;
   setPlaying(false);
 }
@@ -447,9 +477,10 @@ function renderQuiz() {
     const ok = quiz.chosen === quiz.answer;
     const fb = el('quizFeedback');
     const ans = quiz.choices.find(c => c.key === quiz.answer);
-    fb.textContent = ok ? `🎉 ${t('quiz.correct')}` : t('quiz.wrong', { answer: ans ? ans.label() : '' });
+    const ansLabel = ans ? ans.label() : t(`phase.${quiz.answer}`);
+    fb.textContent = ok ? `🎉 ${t('quiz.correct')}` : t('quiz.wrong', { answer: ansLabel });
     fb.className = `quiz__feedback ${ok ? 'is-ok' : 'is-ng'}`;
-    el('quizWhy').textContent = quiz.why();
+    el('quizWhy').textContent = quiz.why(quiz.answer);
     el('quizDemo').hidden = !quiz.demo;
   }
   renderStats();
@@ -457,6 +488,9 @@ function renderQuiz() {
 
 function answerQuiz(key) {
   if (!quiz || quiz.answered) return;
+  // If the learner moved the Moon while the question was open, judge the
+  // answer against the shape that is on screen now.
+  if (quiz.setPhase && current) quiz.answer = current.phaseKey;
   quiz.answered = true;
   quiz.chosen = key;
   const ok = key === quiz.answer;
@@ -500,7 +534,9 @@ function renderMissions() {
 }
 
 function updateMissions(s) {
-  if (!state.userActed) return;
+  // Positions placed by a quiz question don't count — and a toast would
+  // give the hidden answer away.
+  if (!state.userActed || state.quizPlaced || quizHides()) return;
   const ctx = {
     tilt: state.tilt,
     mode: state.mode,
@@ -547,7 +583,7 @@ function readUrl() {
   }
   if (p.get('tilt') === '0') state.tilt = false;
   if (p.get('mode') === 'helio') state.mode = 'helio';
-  if (p.get('lang') === 'en' || p.get('lang') === 'ja') setLang(p.get('lang'));
+  if (p.get('lang') === 'en' || p.get('lang') === 'ja') setLang(p.get('lang'), false);
 }
 
 async function shareLink() {
@@ -625,7 +661,8 @@ function loop(now) {
 function advance(dd) {
   const from = state.day, to = from + dd;
   if (state.autoPause) {
-    if (!nextEclipseCache || nextEclipseCache.tilt !== state.tilt || nextEclipseCache.from > from) {
+    const c = nextEclipseCache;
+    if (!c || c.tilt !== state.tilt || c.from > from || (c.ec && c.ec.day < from)) {
       nextEclipseCache = { from, tilt: state.tilt, ec: findEclipse(from, 1, 'any', { tilt: state.tilt }) };
     }
     const ec = nextEclipseCache.ec;
@@ -649,19 +686,23 @@ function render(s) {
   el('dateOut').textContent = formatDateTime(date, { weekday: true });
   const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   if (document.activeElement !== el('dateInput') && el('dateInput').value !== iso) el('dateInput').value = iso;
-  if (document.activeElement !== el('angleSlider')) el('angleSlider').value = s.synodic.toFixed(1);
-  el('angleOut').textContent = `${Math.round(s.synodic)}°`;
+  if (!state.sliderHeld) el('angleSlider').value = s.synodic.toFixed(1);
+  el('angleOut').textContent = hideNames ? t('cv.hidden') : `${Math.round(s.synodic) % 360}°`;
   el('yearLabel').textContent = String(date.getFullYear());
 
   el('infoPhase').textContent = hideNames ? t('cv.hidden') : t(`phase.${s.phaseKey}`);
-  el('infoAge').textContent = s.moonAge.toFixed(1);
-  el('infoIllum').textContent = `${Math.round(s.illumFrac * 100)}%`;
-  el('infoElong').textContent = `${Math.round(s.synodic)}°`;
+  el('infoAge').textContent = hideNames ? t('cv.hidden') : s.moonAge.toFixed(1);
+  el('infoIllum').textContent = hideNames ? t('cv.hidden') : `${Math.round(s.illumFrac * 100)}%`;
+  el('infoElong').textContent = hideNames ? t('cv.hidden') : `${Math.round(s.synodic) % 360}°`;
   el('infoLat').textContent = `${s.moonLatDeg >= 0 ? '+' : ''}${s.moonLatDeg.toFixed(2)}°`;
   el('infoDist').textContent = getLang() === 'ja'
     ? `${(s.moonDistKm / 10000).toFixed(1)}万km`
     : `${Math.round(s.moonDistKm / 1000)}k km`;
   const tl = el('timeline');
+  const y0 = new Date(date.getFullYear(), 0, 1);
+  tl.setAttribute('aria-valuemin', '1');
+  tl.setAttribute('aria-valuemax', String(Math.round((new Date(date.getFullYear() + 1, 0, 1) - y0) / 864e5)));
+  tl.setAttribute('aria-valuenow', String(Math.floor((date - y0) / 864e5) + 1));
   tl.setAttribute('aria-valuetext', formatDateTime(date));
 
   // Canvases
@@ -680,7 +721,7 @@ function render(s) {
   const mv = el('moonView');
   drawMoonView(mv, s, { fit: fitCanvas(mv), hidden: hideMoon });
   const ch = el('chart');
-  drawEclipseChart(ch, s, { fit: fitCanvas(ch) });
+  drawEclipseChart(ch, s, { fit: fitCanvas(ch), hideNames });
   drawTimeline(tl, state.day, state.tilt, { fit: fitCanvas(tl), theme: currentTheme() });
 
   // Eclipse badge + banner

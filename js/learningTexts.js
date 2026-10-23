@@ -78,6 +78,19 @@ export function buildExplainHtml(s, ctx) {
   const info = PHASE_INFO[s.phaseKey];
   const tr0 = s.transitHour;
 
+  // While a phase question is open, show nothing that gives the answer away.
+  if (hide) {
+    return `
+    <section class="card card--now">
+      <div class="card__icon"><span class="qmark">?</span></div>
+      <div class="card__body">
+        <h4 class="card__title">${escapeHtml(t('ex.now'))}</h4>
+        <p class="card__big">${escapeHtml(name)}</p>
+        <p class="card__sub">${escapeHtml(t('cv.quizHidden'))}</p>
+      </div>
+    </section>`;
+  }
+
   const nowCard = `
     <section class="card card--now">
       <div class="card__icon">${hide ? '<span class="qmark">?</span>' : moonIconSVG(s.illumFrac, s.waxing, 56)}</div>
@@ -211,8 +224,8 @@ export const FAQ = [
   },
   {
     q: { ja: '「食の季節」とは？', en: 'What is an eclipse season?' },
-    a: { ja: '交点を結ぶ線（交点線）は宇宙空間でほぼ同じ向きを保つため、地球が太陽のまわりを回ると、この線が太陽の方を向く時期が約半年ごとに訪れます。その前後約 1 か月が食の季節で、日食と月食がおよそ 2 週間おきに続けて起こることもあります。',
-         en: 'The node line keeps nearly the same direction in space, so as Earth orbits the Sun it points at the Sun about every six months. Around those times — eclipse seasons — solar and lunar eclipses can follow each other two weeks apart.' },
+    a: { ja: '交点を結ぶ線（交点線）は宇宙空間でほぼ同じ向きを保つため、地球が太陽のまわりを回ると、この線が太陽の方を向く時期が約半年ごとに訪れます。太陽が交点の近くにあるこの約 1 か月余りが食の季節で、日食と月食がおよそ 2 週間おきに続けて起こることもあります。',
+         en: 'The node line keeps nearly the same direction in space, so as Earth orbits the Sun it points at the Sun about every six months. The month or so around each of those times is an eclipse season, when solar and lunar eclipses can follow each other two weeks apart.' },
   },
   {
     q: { ja: '月食はどこから見える？ 日食は？', en: 'Where can eclipses be seen?' },
@@ -244,7 +257,7 @@ export const GLOSSARY = [
   { term: { ja: '交点（昇交点・降交点）', en: 'Nodes' }, demo: 'phase:full',
     body: { ja: '白道が黄道面を横切る 2 つの点。月が南から北へ横切る点が昇交点、北から南へが降交点。交点線は 18.6 年で 1 周、西向きに回ります。', en: 'The two points where the Moon’s path crosses the ecliptic: ascending (going north) and descending. The node line turns westward once every 18.6 years.' } },
   { term: { ja: '本影と半影', en: 'Umbra & penumbra' }, demo: 'eclipse:lunar',
-    body: { ja: '本影は太陽の光が完全にさえぎられた濃い影、半影は一部だけさえぎられたうすい影。月が本影に入ると皆既・部分月食、半影だけなら半影月食です。', en: 'The umbra is the dark core where sunlight is fully blocked; the penumbra is the partial shadow around it.' } },
+    body: { ja: '本影は太陽の光が完全にさえぎられた濃い影、半影は一部だけさえぎられたうすい影。月が本影に入ると皆既・部分月食、半影だけなら半影月食です。', en: 'The umbra is the dark core where sunlight is fully blocked; the penumbra is the partial shadow around it. A Moon in the umbra gives a total or partial lunar eclipse; in the penumbra only, a penumbral eclipse.' } },
   { term: { ja: '皆既・金環・部分日食', en: 'Total, annular & partial solar eclipses' }, demo: 'eclipse:solar',
     body: { ja: '月が太陽を完全に隠すと皆既、月が小さく見えて縁が残ると金環、一部だけ隠すと部分日食。', en: 'Total: the Moon covers the whole Sun. Annular: a ring remains. Partial: only part is covered.' } },
   { term: { ja: '食の季節', en: 'Eclipse season' }, demo: 'mode:helio',

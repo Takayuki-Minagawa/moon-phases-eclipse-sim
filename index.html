@@ -36,18 +36,18 @@
 
     <main class="layout">
       <!-- 可視化ビュー -->
-      <section class="panel panel--views" aria-label="views">
+      <section class="panel panel--views" data-i18n-aria="aria.views">
         <div class="views">
           <figure class="view view--overhead">
             <div class="view__bar">
               <h2 class="view__title" data-i18n="view.overhead">俯瞰ビュー</h2>
-              <div class="seg" role="group" aria-label="mode">
+              <div class="seg" role="group" data-i18n-aria="aria.mode">
                 <button class="seg__btn" type="button" data-mode="geo" aria-pressed="true" data-i18n="ui.mode.geo">地球中心</button>
                 <button class="seg__btn" type="button" data-mode="helio" aria-pressed="false" data-i18n="ui.mode.helio">太陽中心</button>
               </div>
             </div>
             <div class="canvas-wrap canvas-wrap--fill">
-              <canvas id="overhead" aria-label="overhead view"></canvas>
+              <canvas id="overhead" data-i18n-aria="aria.overhead"></canvas>
               <div id="eclipseBadge" class="badge" hidden></div>
             </div>
           </figure>
@@ -57,7 +57,7 @@
               <h2 class="view__title" data-i18n="view.moon">地球から見た月</h2>
             </div>
             <div class="canvas-wrap canvas-wrap--moon">
-              <canvas id="moonView" aria-label="moon view"></canvas>
+              <canvas id="moonView" data-i18n-aria="aria.moon"></canvas>
             </div>
             <dl class="moon-info">
               <div><dt data-i18n="info.phase">月相</dt><dd id="infoPhase">—</dd></div>
@@ -74,7 +74,7 @@
               <h2 class="view__title" data-i18n="view.chart">食の判定図</h2>
             </div>
             <div class="canvas-wrap canvas-wrap--chart">
-              <canvas id="chart" aria-label="eclipse chart"></canvas>
+              <canvas id="chart" data-i18n-aria="aria.chart"></canvas>
             </div>
           </figure>
         </div>
@@ -83,9 +83,9 @@
           <div class="timeline__bar">
             <h2 class="view__title view__title--plain" data-i18n="view.timeline">タイムライン</h2>
             <div class="yearnav">
-              <button id="yearPrev" class="btn btn--small btn--ghost" type="button" aria-label="previous year">◀</button>
+              <button id="yearPrev" class="btn btn--small btn--ghost" type="button" data-i18n-aria="aria.prevYear">◀</button>
               <strong id="yearLabel">2026</strong>
-              <button id="yearNext" class="btn btn--small btn--ghost" type="button" aria-label="next year">▶</button>
+              <button id="yearNext" class="btn btn--small btn--ghost" type="button" data-i18n-aria="aria.nextYear">▶</button>
             </div>
             <ul class="legend">
               <li><i class="lg lg--season"></i><span data-i18n="view.legend.season">食の季節</span></li>
@@ -96,7 +96,7 @@
             </ul>
           </div>
           <div class="canvas-wrap canvas-wrap--timeline">
-            <canvas id="timeline" tabindex="0" role="slider" aria-label="timeline"></canvas>
+            <canvas id="timeline" tabindex="0" role="slider" data-i18n-aria="aria.timeline"></canvas>
           </div>
         </div>
       </section>
@@ -129,7 +129,7 @@
             <button class="btn btn--small" type="button" data-step="1" data-i18n="ui.step.dp">+1日</button>
           </div>
           <div class="row">
-            <input id="dateInput" class="input" type="date" aria-label="date" />
+            <input id="dateInput" class="input" type="date" data-i18n-aria="aria.date" />
             <button id="nowBtn" class="btn" type="button" data-i18n="ui.today">今日</button>
           </div>
         </div>

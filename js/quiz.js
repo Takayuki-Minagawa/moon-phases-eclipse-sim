@@ -170,7 +170,7 @@ export function buildQuestion(kind) {
       text: () => t(k === 'phaseName' ? 'q.phaseName' : 'q.layout'),
       choices: shuffle([truth, ...others]).map(key => ({ key, label: () => t(`phase.${key}`), icon: k === 'layoutToPhase' ? key : null })),
       answer: truth,
-      why: () => tr(PHASE_INFO[truth].layout),
+      why: (ans = truth) => tr(PHASE_INFO[ans].layout),
       setPhase: truth,           // move the simulation before asking
       demo: null,
     };

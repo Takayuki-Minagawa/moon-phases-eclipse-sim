@@ -87,8 +87,9 @@ export function drawMoonView(canvas, s, ui = {}) {
   ctx.textBaseline = 'top';
   label(ctx, isNew ? t('cv.newMoonSky') : t('cv.skyAt', { h: formatHour(hour) }), 10, 10);
   ctx.font = '10.5px system-ui, sans-serif';
-  ctx.fillStyle = sun > 0.5 ? 'rgba(20, 30, 60, 0.75)' : 'rgba(230, 236, 255, 0.7)';
-  ctx.fillText(t('cv.northHemi'), 10, 38);
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = 'rgba(230, 236, 255, 0.75)';
+  ctx.fillText(t('cv.northHemi'), 10, h - 8);
 }
 
 function drawHidden(ctx, w, h) {

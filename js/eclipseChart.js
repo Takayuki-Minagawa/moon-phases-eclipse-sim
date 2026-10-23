@@ -120,7 +120,7 @@ export function drawEclipseChart(canvas, s, ui) {
   // Captions
   ctx.font = '600 12px system-ui, sans-serif';
   ctx.textBaseline = 'top';
-  pill(ctx, t(nearNew ? 'cv.chart.solar' : 'cv.chart.lunar'), 8, 8, 'rgba(5,8,20,0.6)', '#eef2ff');
+  if (!ui.hideNames) pill(ctx, t(nearNew ? 'cv.chart.solar' : 'cv.chart.lunar'), 8, 8, 'rgba(5,8,20,0.6)', '#eef2ff');
   const hit = s.eclipse.possible;
   ctx.textAlign = 'right';
   pill(ctx, hit ? t('cv.hit') : t('cv.miss'), w - 8, 8,
@@ -148,7 +148,7 @@ export function drawEclipseChart(canvas, s, ui) {
   ctx.fillStyle = 'rgba(230, 236, 255, 0.85)';
   ctx.fillText(t('cv.lat', { lat }), 8, h - 8);
   ctx.textAlign = 'right';
-  ctx.fillText(t(key, { d: days.toFixed(1) }), w - 8, h - 8);
+  if (!ui.hideNames) ctx.fillText(t(key, { d: days.toFixed(1) }), w - 8, h - 8);
   ctx.textAlign = 'left';
 }
 

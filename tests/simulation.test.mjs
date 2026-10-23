@@ -87,3 +87,13 @@ test('moon age and date conversions', () => {
   assert.ok(computeState(t).moonAge < 0.05 || computeState(t).moonAge > 29.4);
   assert.equal(dayToDate(day('2026-01-02T03:04:05Z')).toISOString(), '2026-01-02T03:04:05.000Z');
 });
+
+test('jumping to a new moon gives age 0 and angle 0, never ~360°', () => {
+  let t = day('2026-01-01T00:00Z');
+  for (let i = 0; i < 40; i++) {
+    t = findSynodic(t, 0, 1);
+    const s = computeState(t);
+    assert.ok(s.synodic < 1e-3, `synodic ${s.synodic}`);
+    assert.ok(s.moonAge < 0.01, `age ${s.moonAge} at ${dayToDate(t).toISOString()}`);
+  }
+});
