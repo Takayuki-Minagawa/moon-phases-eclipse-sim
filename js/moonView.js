@@ -1,172 +1,276 @@
-// Earth-view moon disk renderer. Renders the moon with the correct
-// illumination fraction and waxing/waning orientation.
+// "The Moon from Earth": the Moon in the southern sky at the time it is
+// highest, with the correct phase. During eclipses it switches to an
+// eclipse picture drawn from the actual geometry (shadow / disk positions).
 
-const CRATERS = [
-  { x: -0.35, y: -0.20, r: 0.08 },
-  { x:  0.15, y: -0.35, r: 0.05 },
-  { x:  0.30, y:  0.15, r: 0.07 },
-  { x: -0.10, y:  0.25, r: 0.06 },
-  { x: -0.45, y:  0.30, r: 0.04 },
-  { x:  0.05, y:  0.05, r: 0.03 },
-];
+import { t, formatHour } from './i18n.js';
+import { drawTexturedMoon } from './moonShape.js';
+import { wrap180 } from './simulation.js';
 
-export function drawMoonView(canvas, state) {
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
+const STARS = Array.from({ length: 70 }, (_, i) => ({
+  x: ((i * 7919) % 997) / 997,
+  y: ((i * 104729) % 991) / 991,
+  r: i % 5 === 0 ? 1.3 : 0.7,
+}));
+
+export function drawMoonView(canvas, s, ui = {}) {
+  const { ctx, w, h } = ui.fit;
   ctx.clearRect(0, 0, w, h);
 
-  // Background: sky gradient that depends on synodic angle (day/night cue).
-  const t = state.synodic / 360;
-  const top    = sampleSkyTop(t);
-  const bottom = sampleSkyBot(t);
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, top);
-  grad.addColorStop(1, bottom);
-  ctx.fillStyle = grad;
+  if (ui.hidden) {
+    drawHidden(ctx, w, h);
+    return;
+  }
+  if (s.eclipse.possible && s.eclipse.kind === 'solar') {
+    drawSolarEclipse(ctx, w, h, s);
+    return;
+  }
+
+  // Sky colour at the time the Moon is highest in the south.
+  const hour = s.transitHour;
+  const dayF = (Math.cos(((hour - 12) / 24) * 2 * Math.PI) + 1) / 2;   // 1 noon … 0 midnight
+  const sun = smooth((dayF - 0.25) / 0.5);
+  const top = mix([6, 10, 30], [52, 118, 205], sun);
+  const bot = mix([16, 26, 66], [150, 196, 238], sun);
+  // Twilight glow when the moon culminates around sunset / sunrise
+  const twilight = Math.max(0, 1 - Math.abs(dayF - 0.5) / 0.22);
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, rgb(top));
+  g.addColorStop(0.75, rgb(bot));
+  g.addColorStop(1, rgb(mix(bot, [245, 150, 90], twilight * 0.7)));
+  ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
 
-  // Stars for a night-ish background
-  if (state.synodic < 90 || state.synodic > 270) {
-    drawStars(ctx, w, h, 40);
-  } else if (state.synodic > 135 && state.synodic < 225) {
-    drawStars(ctx, w, h, 14);
+  // Stars at night
+  const starA = Math.max(0, 1 - sun * 2.2);
+  if (starA > 0.02) {
+    ctx.fillStyle = `rgba(255,255,255,${0.75 * starA})`;
+    for (const st of STARS) {
+      ctx.beginPath();
+      ctx.arc(st.x * w, st.y * h * 0.8, st.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   const cx = w / 2;
-  const cy = h / 2 + 6;
-  const R  = Math.min(w, h) * 0.38;
+  const cy = h * 0.44;
+  const R = Math.min(w, h) * 0.3;
 
-  drawMoonDisk(ctx, cx, cy, R, state.illumFrac, state.waxing);
+  const lunar = s.eclipse.possible && s.eclipse.kind === 'lunar';
+  const isNew = s.illumFrac < 0.02 && !lunar;
 
-  // Craters — tinted by local shadow via composite
-  ctx.save();
-  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
-  ctx.fillStyle = 'rgba(10, 12, 24, 0.22)';
-  for (const c of CRATERS) {
-    ctx.beginPath();
-    ctx.arc(cx + c.x * R, cy + c.y * R, c.r * R, 0, Math.PI * 2);
-    ctx.fill();
+  // Glow around the bright moon
+  if (!isNew) {
+    const glow = ctx.createRadialGradient(cx, cy, R * 0.9, cx, cy, R * 1.9);
+    const ga = (lunar && s.eclipse.type !== 'penumbral' ? 0.05 : 0.22) * s.illumFrac * (1 - sun * 0.7);
+    glow.addColorStop(0, `rgba(255, 250, 230, ${ga})`);
+    glow.addColorStop(1, 'rgba(255, 250, 230, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, w, h);
   }
+
+  ctx.save();
+  if (isNew) ctx.globalAlpha = 0.35;
+  // In daylight the night side blends with the sky
+  // In daylight the unlit part is invisible against the sky, so paint it
+  // with the sky gradient itself; at night keep a faint earthshine.
+  const night = sun > 0.5 ? g : 'rgba(14, 18, 36, 0.9)';
+  drawTexturedMoon(ctx, cx, cy, R, s.illumFrac, s.waxing, { nightColor: night });
   ctx.restore();
 
-  // Moon outline for definition
-  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.arc(cx, cy, R, 0, Math.PI * 2);
-  ctx.stroke();
+  if (lunar) drawEarthShadowOnMoon(ctx, cx, cy, R, s);
 
-  // Eclipse overlay on the moon view
-  if (state.eclipse.kind === 'lunar' && state.eclipse.possible) {
-    drawLunarOverlay(ctx, cx, cy, R, state.eclipse.type);
-  } else if (state.eclipse.kind === 'solar' && state.eclipse.possible) {
-    drawSolarInset(ctx, w, h, state.eclipse.type);
-  }
+  // Horizon silhouette
+  drawHorizon(ctx, w, h, sun);
+
+  // Captions
+  ctx.font = '600 12px system-ui, sans-serif';
+  ctx.textBaseline = 'top';
+  label(ctx, isNew ? t('cv.newMoonSky') : t('cv.skyAt', { h: formatHour(hour) }), 10, 10);
+  ctx.font = '10.5px system-ui, sans-serif';
+  ctx.fillStyle = sun > 0.5 ? 'rgba(20, 30, 60, 0.75)' : 'rgba(230, 236, 255, 0.7)';
+  ctx.fillText(t('cv.northHemi'), 10, 38);
 }
 
-function drawMoonDisk(ctx, cx, cy, R, k, waxing) {
+function drawHidden(ctx, w, h) {
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#0b1230');
+  g.addColorStop(1, '#1b2550');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.beginPath();
+  ctx.arc(w / 2, h * 0.44, Math.min(w, h) * 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = `700 ${Math.round(Math.min(w, h) * 0.22)}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('?', w / 2, h * 0.44);
+  ctx.font = '600 13px system-ui, sans-serif';
+  ctx.fillText(t('cv.quizHidden'), w / 2, h * 0.86);
+  ctx.textAlign = 'left';
+}
+
+// Earth's umbra and penumbra overlaid on the Moon, using the real angular
+// sizes. Sky orientation: north up, east to the left.
+function drawEarthShadowOnMoon(ctx, cx, cy, R, s) {
+  const r = s.radii;
+  const scale = R / r.moonRad;                  // px per degree
+  const dLon = wrap180(s.synodic - 180);         // Moon east of shadow centre
+  const sx = cx + dLon * scale;                  // shadow centre (east → left)
+  const sy = cy + s.moonLatDeg * scale;
+  const ru = r.umbra * scale, rp = r.penumbra * scale;
+
   ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+  const pg = ctx.createRadialGradient(sx, sy, ru, sx, sy, rp);
+  pg.addColorStop(0, 'rgba(20, 12, 10, 0.55)');
+  pg.addColorStop(1, 'rgba(20, 12, 10, 0)');
+  ctx.fillStyle = pg;
+  ctx.beginPath(); ctx.arc(sx, sy, rp, 0, Math.PI * 2); ctx.fill();
 
-  // Base dark disk
-  ctx.fillStyle = '#2b2f48';
-  ctx.beginPath();
-  ctx.arc(cx, cy, R, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Clip to disk so rectangle fills don't bleed
-  ctx.beginPath();
-  ctx.arc(cx, cy, R, 0, Math.PI * 2);
-  ctx.clip();
-
-  // Lit hemisphere fill
-  ctx.fillStyle = '#eef2ff';
-  if (waxing) {
-    ctx.fillRect(cx, cy - R - 2, R + 2, 2 * R + 4);
-  } else {
-    ctx.fillRect(cx - R - 2, cy - R - 2, R + 2, 2 * R + 4);
-  }
-
-  // Terminator ellipse correction
-  const cosI = 2 * k - 1;          // -1..1
-  const rx   = R * Math.abs(cosI); // ellipse minor radius
-  if (rx > 0.5) {
-    ctx.fillStyle = (k < 0.5) ? '#2b2f48' : '#eef2ff';
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, rx, R, 0, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (Math.abs(cosI) < 0.02) {
-    // Quarter: nothing extra needed; ellipse is a line.
-  }
-
-  // Subtle limb darkening
-  const lg = ctx.createRadialGradient(cx, cy, R * 0.6, cx, cy, R);
-  lg.addColorStop(0, 'rgba(0,0,0,0)');
-  lg.addColorStop(1, 'rgba(0,0,0,0.25)');
-  ctx.fillStyle = lg;
-  ctx.beginPath();
-  ctx.arc(cx, cy, R, 0, Math.PI * 2);
-  ctx.fill();
-
+  const ug = ctx.createRadialGradient(sx, sy, ru * 0.2, sx, sy, ru * 1.02);
+  ug.addColorStop(0, 'rgba(70, 14, 6, 0.93)');
+  ug.addColorStop(0.85, 'rgba(150, 50, 20, 0.85)');
+  ug.addColorStop(1, 'rgba(170, 70, 30, 0.6)');
+  ctx.fillStyle = ug;
+  ctx.beginPath(); ctx.arc(sx, sy, ru, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
 
-function drawLunarOverlay(ctx, cx, cy, R, type) {
-  ctx.save();
-  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+// Solar eclipse as seen from the place on Earth closest to the shadow axis.
+function drawSolarEclipse(ctx, w, h, s) {
+  const r = s.radii;
+  const type = s.eclipse.type;
+  const g = ctx.createLinearGradient(0, 0, 0, h);
   if (type === 'total') {
-    ctx.fillStyle = 'rgba(180, 40, 40, 0.55)'; // blood moon
-  } else if (type === 'partial') {
-    ctx.fillStyle = 'rgba(150, 40, 40, 0.40)';
+    g.addColorStop(0, '#020410'); g.addColorStop(1, '#141c3c');
   } else {
-    ctx.fillStyle = 'rgba(80, 80, 130, 0.35)';
+    g.addColorStop(0, '#2a4f86'); g.addColorStop(1, '#6f98c9');
   }
-  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
-  ctx.restore();
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  if (type === 'total') {
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    for (const st of STARS.slice(0, 25)) {
+      ctx.beginPath(); ctx.arc(st.x * w, st.y * h * 0.8, st.r, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  const cx = w / 2, cy = h * 0.46;
+  const Rs = Math.min(w, h) * 0.24;
+  const scale = Rs / r.sunRad;
+  const topoMoon = r.moonRad * (1 + Math.sin(r.moonPar * Math.PI / 180));
+  const Rm = topoMoon * scale;
+
+  // Parallax lets an observer on Earth shift the Moon by up to (π☾ − π☉).
+  const dLon = wrap180(s.synodic);
+  const lat = s.moonLatDeg;
+  const sep = Math.hypot(dLon, lat);
+  const apparent = Math.max(0, sep - (r.moonPar - r.sunPar));
+  const ux = sep > 1e-6 ? -dLon / sep : 0;
+  const uy = sep > 1e-6 ? -lat / sep : 0;
+  const mx = cx + ux * apparent * scale;
+  const my = cy + uy * apparent * scale;
+
+  // Corona (total) or glare
+  if (type === 'total') {
+    const cg = ctx.createRadialGradient(cx, cy, Rs * 0.9, cx, cy, Rs * 3);
+    cg.addColorStop(0, 'rgba(240, 245, 255, 0.85)');
+    cg.addColorStop(0.3, 'rgba(200, 215, 255, 0.25)');
+    cg.addColorStop(1, 'rgba(200, 215, 255, 0)');
+    ctx.fillStyle = cg;
+    ctx.beginPath(); ctx.arc(cx, cy, Rs * 3, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(230, 236, 255, 0.25)';
+    for (let i = 0; i < 18; i++) {
+      const a = (i / 18) * Math.PI * 2 + 0.2;
+      const len = Rs * (1.5 + ((i * 37) % 10) / 8);
+      ctx.lineWidth = 1 + (i % 3);
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * Rs, cy + Math.sin(a) * Rs);
+      ctx.lineTo(cx + Math.cos(a) * len, cy + Math.sin(a) * len);
+      ctx.stroke();
+    }
+  } else {
+    const glare = ctx.createRadialGradient(cx, cy, Rs, cx, cy, Rs * 2.4);
+    glare.addColorStop(0, 'rgba(255, 245, 200, 0.6)');
+    glare.addColorStop(1, 'rgba(255, 245, 200, 0)');
+    ctx.fillStyle = glare;
+    ctx.beginPath(); ctx.arc(cx, cy, Rs * 2.4, 0, Math.PI * 2); ctx.fill();
+  }
+
+  if (type !== 'total') {
+    const sg = ctx.createRadialGradient(cx, cy, 0, cx, cy, Rs);
+    sg.addColorStop(0, '#fffbe6');
+    sg.addColorStop(0.8, '#ffe28a');
+    sg.addColorStop(1, '#ffb347');
+    ctx.fillStyle = sg;
+    ctx.beginPath(); ctx.arc(cx, cy, Rs, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = '#05060c';
+  ctx.beginPath(); ctx.arc(mx, my, Rm, 0, Math.PI * 2); ctx.fill();
+
+  drawHorizon(ctx, w, h, type === 'total' ? 0 : 0.6);
+
+  ctx.font = '600 12px system-ui, sans-serif';
+  ctx.textBaseline = 'top';
+  label(ctx, t('cv.solarView'), 10, 10);
 }
 
-function drawSolarInset(ctx, w, h, type) {
-  // Small icon in corner showing a solar eclipse diagram
-  const x = w - 54, y = 22, r = 16;
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(x - 20, y - 20, 68, 40);
-  ctx.fillStyle = '#ffd76a';
-  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#1a1d2b';
-  const dx = (type === 'annular') ? r * 0.1 : r * 0.2;
-  ctx.beginPath(); ctx.arc(x + dx, y, r * 0.92, 0, Math.PI * 2); ctx.fill();
-  ctx.restore();
-}
-
-function sampleSkyTop(t) {
-  // t ∈ [0,1]. 0 = new moon (daylight direction), 0.5 = full (night)
-  // Around 0: brighter blue; around 0.5: deep navy
-  const night = Math.sin(t * Math.PI);        // 0..1 with peak at t=0.5
-  const r = lerp(16, 5, night);
-  const g = lerp(28, 8, night);
-  const b = lerp(60, 22, night);
-  return `rgb(${r|0}, ${g|0}, ${b|0})`;
-}
-function sampleSkyBot(t) {
-  const night = Math.sin(t * Math.PI);
-  const r = lerp(30, 2, night);
-  const g = lerp(45, 4, night);
-  const b = lerp(90, 15, night);
-  return `rgb(${r|0}, ${g|0}, ${b|0})`;
-}
-function lerp(a, b, t) { return a + (b - a) * t; }
-
-function drawStars(ctx, w, h, n) {
-  ctx.save();
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  for (let i = 0; i < n; i++) {
-    // Deterministic pseudo-random placement based on i
-    const x = ((i * 97) % w);
-    const y = ((i * 53) % (h - 20)) + 6;
-    const r = (i % 3 === 0) ? 1.4 : 0.8;
+function drawHorizon(ctx, w, h, sun) {
+  const base = h * 0.9;
+  ctx.fillStyle = sun > 0.5 ? '#2c3d2f' : '#070a14';
+  ctx.beginPath();
+  ctx.moveTo(0, h);
+  ctx.lineTo(0, base);
+  // gentle hills with a few houses
+  for (let x = 0; x <= w; x += w / 24) {
+    ctx.lineTo(x, base - Math.sin(x / w * 7) * h * 0.015 - (x / w > 0.55 && x / w < 0.75 ? h * 0.02 : 0));
+  }
+  ctx.lineTo(w, h);
+  ctx.closePath();
+  ctx.fill();
+  // houses
+  const houses = [[0.12, 0.05], [0.2, 0.035], [0.82, 0.045]];
+  for (const [fx, fh] of houses) {
+    const x = fx * w, bw = w * 0.05, hh = h * fh;
+    ctx.fillRect(x, base - hh, bw, hh + 2);
     ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.moveTo(x - 3, base - hh); ctx.lineTo(x + bw / 2, base - hh - h * 0.03); ctx.lineTo(x + bw + 3, base - hh);
     ctx.fill();
+    if (sun < 0.5) {
+      ctx.fillStyle = 'rgba(255, 210, 120, 0.85)';
+      ctx.fillRect(x + bw * 0.35, base - hh * 0.6, bw * 0.25, hh * 0.25);
+      ctx.fillStyle = '#070a14';
+    }
   }
-  ctx.restore();
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.font = '700 12px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(t('cv.south.dir'), w / 2, h - 6);
+  ctx.textAlign = 'left';
 }
+
+function label(ctx, text, x, y) {
+  const m = ctx.measureText(text);
+  ctx.fillStyle = 'rgba(5, 8, 20, 0.55)';
+  roundRect(ctx, x - 6, y - 4, m.width + 12, 22, 8);
+  ctx.fill();
+  ctx.fillStyle = '#eef2ff';
+  ctx.fillText(text, x, y + 1);
+}
+
+export function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function smooth(x) { const c = Math.max(0, Math.min(1, x)); return c * c * (3 - 2 * c); }
+function mix(a, b, f) { return a.map((v, i) => Math.round(v + (b[i] - v) * f)); }
+function rgb(c) { return `rgb(${c[0]}, ${c[1]}, ${c[2]})`; }
