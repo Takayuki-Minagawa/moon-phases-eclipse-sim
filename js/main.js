@@ -10,7 +10,7 @@ import { drawEclipseChart } from './eclipseChart.js';
 import { drawTimeline, timelineDayAt, yearData } from './timeline.js';
 import { setLang, getLang, initialLang, applyStaticI18n, t, tr, formatDateTime } from './i18n.js';
 import { buildExplainHtml, buildFaqHtml, buildGlossaryHtml, eclipseName, escapeHtml } from './learningTexts.js';
-import { buildQuestion } from './quiz.js';
+import { buildQuestion, phaseChoices } from './quiz.js';
 import { MISSIONS, loadProgress, saveProgress, checkMissions } from './missions.js';
 import { phaseIconSVG, PHASE_SYNODIC } from './moonShape.js';
 import { initTheme, toggleTheme, currentTheme } from './theme.js';
@@ -680,13 +680,9 @@ function advance(dd) {
 // screen among the choices (replacing the shape that is no longer shown).
 function syncQuizChoices(s) {
   if (!quizHides() || quiz.pendingJump || quiz.answer === s.phaseKey) return;
-  const old = quiz.choices.find(c => c.key === quiz.answer);
   const key = s.phaseKey;
-  if (!quiz.choices.some(c => c.key === key) && old) {
-    old.key = key;
-    old.label = () => t(`phase.${key}`);
-    if (old.icon) old.icon = key;
-  }
+  // Redraw all choices so the changed button doesn't give the answer away.
+  if (!quiz.choices.some(c => c.key === key)) quiz.choices = phaseChoices(key, quiz.kind === 'layoutToPhase');
   quiz.answer = key;
   renderQuiz();
 }

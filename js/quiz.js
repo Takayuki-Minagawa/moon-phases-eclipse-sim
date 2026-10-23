@@ -159,16 +159,21 @@ const ECLIPSE_BANK = [
   },
 ];
 
+// Four shuffled phase choices that include `truth`.
+export function phaseChoices(truth, withIcons) {
+  const others = shuffle(PHASE_KEYS.filter(x => x !== truth)).slice(0, 3);
+  return shuffle([truth, ...others]).map(key => ({ key, label: () => t(`phase.${key}`), icon: withIcons ? key : null }));
+}
+
 // Build a question. `kind` may be 'mix'.
 export function buildQuestion(kind) {
   const k = kind === 'mix' ? pick(QUIZ_KINDS) : kind;
   if (k === 'phaseName' || k === 'layoutToPhase') {
     const truth = pick(PHASE_KEYS);
-    const others = shuffle(PHASE_KEYS.filter(x => x !== truth)).slice(0, 3);
     return {
       kind: k,
       text: () => t(k === 'phaseName' ? 'q.phaseName' : 'q.layout'),
-      choices: shuffle([truth, ...others]).map(key => ({ key, label: () => t(`phase.${key}`), icon: k === 'layoutToPhase' ? key : null })),
+      choices: phaseChoices(truth, k === 'layoutToPhase'),
       answer: truth,
       why: (ans = truth) => tr(PHASE_INFO[ans].layout),
       setPhase: truth,           // move the simulation before asking
