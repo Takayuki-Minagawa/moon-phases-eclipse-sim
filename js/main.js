@@ -488,9 +488,8 @@ function renderQuiz() {
 
 function answerQuiz(key) {
   if (!quiz || quiz.answered) return;
-  // If the learner moved the Moon while the question was open, judge the
-  // answer against the shape that is on screen now.
-  if (quiz.setPhase && current) quiz.answer = current.phaseKey;
+  // Judge phase questions against the shape that is on screen now.
+  if (quiz.setPhase && current) syncQuizChoices(current);
   quiz.answered = true;
   quiz.chosen = key;
   const ok = key === quiz.answer;
@@ -677,7 +676,23 @@ function advance(dd) {
   state.day = to;
 }
 
+// If the learner moves the Moon during a phase question, keep the shape on
+// screen among the choices (replacing the shape that is no longer shown).
+function syncQuizChoices(s) {
+  if (!quizHides() || quiz.pendingJump || quiz.answer === s.phaseKey) return;
+  const old = quiz.choices.find(c => c.key === quiz.answer);
+  const key = s.phaseKey;
+  if (!quiz.choices.some(c => c.key === key) && old) {
+    old.key = key;
+    old.label = () => t(`phase.${key}`);
+    if (old.icon) old.icon = key;
+  }
+  quiz.answer = key;
+  renderQuiz();
+}
+
 function render(s) {
+  syncQuizChoices(s);
   const hideNames = quizHides();
   const hideMoon = hideNames && quiz.kind === 'layoutToPhase';
 
